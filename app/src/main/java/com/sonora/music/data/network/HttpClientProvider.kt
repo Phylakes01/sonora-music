@@ -3,8 +3,10 @@ package com.sonora.music.data.network
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -21,7 +23,9 @@ object HttpClientProvider {
             .addInterceptor { chain ->
                 val original = chain.request()
                 val builder = original.newBuilder()
-                    .header("User-Agent", "Sonora/1.0 (Android)")
+                if (original.header("User-Agent").isNullOrBlank()) {
+                    builder.header("User-Agent", "Sonora/1.0 (Android)")
+                }
                 if (original.header("Accept").isNullOrBlank()) {
                     builder.header("Accept", "application/json")
                 }
@@ -33,21 +37,24 @@ object HttpClientProvider {
 
 internal suspend fun OkHttpClient.getText(
     url: String,
-    acceptHeader: String? = null
+    acceptHeader: String? = null,
+    headers: Map<String, String> = emptyMap()
 ): String? = withContext(Dispatchers.IO) {
-    val (code, body) = getResponse(url, acceptHeader)
+    val (code, body) = getResponse(url, acceptHeader, headers)
     if (code in 200..299) body else null
 }
 
 internal suspend fun OkHttpClient.getResponse(
     url: String,
-    acceptHeader: String? = null
+    acceptHeader: String? = null,
+    headers: Map<String, String> = emptyMap()
 ): Pair<Int, String?> = withContext(Dispatchers.IO) {
     try {
         val requestBuilder = Request.Builder().url(url).get()
         if (!acceptHeader.isNullOrBlank()) {
             requestBuilder.header("Accept", acceptHeader)
         }
+        headers.forEach { (k, v) -> requestBuilder.header(k, v) }
         newCall(requestBuilder.build()).execute().use { response ->
             response.code to response.body?.string()
         }
@@ -55,6 +62,29 @@ internal suspend fun OkHttpClient.getResponse(
         throw e
     } catch (_: Throwable) {
         -1 to null
+    }
+}
+
+internal suspend fun OkHttpClient.postJson(
+    url: String,
+    jsonBody: String,
+    headers: Map<String, String> = emptyMap()
+): String? = withContext(Dispatchers.IO) {
+    try {
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        val body = jsonBody.toRequestBody(mediaType)
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(body)
+            .header("Accept", "application/json")
+        headers.forEach { (k, v) -> requestBuilder.header(k, v) }
+        newCall(requestBuilder.build()).execute().use { response ->
+            if (response.code in 200..299) response.body?.string() else null
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        null
     }
 }
 

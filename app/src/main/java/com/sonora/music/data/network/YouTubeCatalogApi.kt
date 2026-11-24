@@ -43,6 +43,7 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
     private val oEmbedCache = ConcurrentHashMap<String, Track>()
     private val feedCache = ConcurrentHashMap<String, CacheEntry<List<Track>>>()
     private val rssIndexCache = ConcurrentHashMap<String, Track>()
+    private val liveSearchCache = ConcurrentHashMap<String, CacheEntry<List<Track>>>()
     @Volatile
     private var lastRssIndexWarmMs: Long = 0L
 
@@ -259,21 +260,31 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
                 effectiveTokens.any { token -> token.length >= 3 && chNorm.contains(token) }
         }.take(4)
 
-        val channelRssTracks = if (matchingChannels.isNotEmpty()) {
-            withTimeoutOrNull(4_500L) {
-                coroutineScope {
-                    matchingChannels.map { ch ->
-                        async {
-                            withTimeoutOrNull(4_000L) {
-                                fetchChannelRssVideos(ch.channelId, ch.regionHint)
-                            }.orEmpty()
+        val (liveResults, channelRssTracks) = coroutineScope {
+            val liveDef = async {
+                runCatching { fetchLiveYouTubeSearch(expandedQuery, maxResults = 20) }
+                    .getOrDefault(emptyList())
+            }
+            val channelDef = async {
+                if (matchingChannels.isEmpty()) {
+                    emptyList()
+                } else {
+                    withTimeoutOrNull(4_000L) {
+                        coroutineScope {
+                            matchingChannels.map { ch ->
+                                async {
+                                    withTimeoutOrNull(3_500L) {
+                                        fetchChannelRssVideos(ch.channelId, ch.regionHint)
+                                    }.orEmpty()
+                                }
+                            }.awaitAll().flatten()
                         }
-                    }.awaitAll().flatten()
+                    }.orEmpty()
                 }
-            }.orEmpty()
-        } else {
-            emptyList()
+            }
+            liveDef.await() to channelDef.await()
         }
+
         channelRssTracks.forEach { track ->
             val key = track.youtubeVideoId.ifBlank { track.id }
             rssIndexCache[key] = track
@@ -284,11 +295,313 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             if (score > 0) track to score else null
         }
 
-        val sorted = (curatedMatches + indexedRssMatches + rssMatches)
+        val highConfidenceCurated = curatedMatches
+            .filter { it.second >= 100 }
+            .sortedByDescending { it.second }
+            .map { it.first }
+        val secondaryMatches = (curatedMatches.filter { it.second < 100 } + indexedRssMatches + rssMatches)
             .sortedByDescending { it.second }
             .map { it.first }
 
-        RegionalContentFilter.filterTracks(deduplicateByVideoId(sorted))
+        RegionalContentFilter.filterTracks(
+            deduplicateByVideoId(highConfidenceCurated + liveResults + secondaryMatches)
+        )
+    }
+
+    private suspend fun fetchLiveYouTubeSearch(query: String, maxResults: Int = 20): List<Track> {
+        val cleanQuery = query.trim()
+        if (cleanQuery.isEmpty()) return emptyList()
+
+        val cacheKey = normalizeForMatch(cleanQuery).ifEmpty { cleanQuery.lowercase(Locale.ROOT) }
+        val now = System.currentTimeMillis()
+        liveSearchCache[cacheKey]?.let { cached ->
+            if (now - cached.timestampMs < FEED_CACHE_TTL_MS) {
+                return RegionalContentFilter.filterTracks(cached.value).take(maxResults)
+            }
+        }
+
+        val headers = mapOf(
+            "User-Agent" to YOUTUBE_WEB_USER_AGENT,
+            "Accept-Language" to "en-US,en;q=0.9",
+            "Origin" to "https://www.youtube.com",
+            "Referer" to "https://www.youtube.com/"
+        )
+
+        val payload = JSONObject().apply {
+            put(
+                "context",
+                JSONObject().put(
+                    "client",
+                    JSONObject().apply {
+                        put("clientName", "WEB")
+                        put("clientVersion", "2.20250101.00.00")
+                        put("hl", "en")
+                        put("gl", "PH")
+                    }
+                )
+            )
+            put("query", cleanQuery)
+            put("params", "EgIQAQ%3D%3D")
+        }.toString()
+
+        val primaryTracks = withTimeoutOrNull(7_000L) {
+            client.postJson(YOUTUBEI_SEARCH_ENDPOINT, payload, headers)
+                ?.let { parseYouTubeSearchJson(it, maxResults) }
+                .orEmpty()
+        }.orEmpty()
+
+        val resolvedTracks = if (primaryTracks.isNotEmpty()) {
+            primaryTracks
+        } else {
+            val webUrl = "$YOUTUBE_WEB_SEARCH_ENDPOINT?search_query=${encodeUrlParam(cleanQuery)}&sp=EgIQAQ%253D%253D"
+            withTimeoutOrNull(7_000L) {
+                client.getText(
+                    url = webUrl,
+                    acceptHeader = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    headers = headers
+                )?.let(::extractYtInitialDataJson)
+                    ?.let { parseYouTubeSearchJson(it, maxResults) }
+                    .orEmpty()
+            }.orEmpty()
+        }
+
+        val filtered = RegionalContentFilter.filterTracks(resolvedTracks).take(maxResults)
+        if (filtered.isNotEmpty()) {
+            liveSearchCache[cacheKey] = CacheEntry(filtered, now)
+        }
+        return filtered
+    }
+
+    internal fun extractYtInitialDataJson(html: String): String? {
+        if (html.isBlank()) return null
+        val markers = listOf(
+            "var ytInitialData = ",
+            "window[\"ytInitialData\"] = ",
+            "window['ytInitialData'] = "
+        )
+        var startBrace = -1
+        for (marker in markers) {
+            val idx = html.indexOf(marker)
+            if (idx >= 0) {
+                startBrace = html.indexOf('{', idx + marker.length)
+                if (startBrace >= 0) break
+            }
+        }
+        if (startBrace < 0) return null
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in startBrace until html.length) {
+            val ch = html[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (ch == '\\' && inString) {
+                escaped = true
+                continue
+            }
+            if (ch == '"') {
+                inString = !inString
+                continue
+            }
+            if (!inString) {
+                if (ch == '{') {
+                    depth++
+                } else if (ch == '}') {
+                    depth--
+                    if (depth == 0) {
+                        return html.substring(startBrace, i + 1)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    internal fun parseYouTubeSearchJson(json: String, maxResults: Int = 20): List<Track> {
+        if (json.isBlank()) return emptyList()
+        return try {
+            val root = JSONObject(json)
+            val sections = root.optJSONObject("contents")
+                ?.optJSONObject("twoColumnSearchResultsRenderer")
+                ?.optJSONObject("primaryContents")
+                ?.optJSONObject("sectionListRenderer")
+                ?.optJSONArray("contents")
+                ?: return emptyList()
+
+            val tracks = ArrayList<Track>(maxResults.coerceAtMost(24))
+            for (s in 0 until sections.length()) {
+                val itemSection = sections.optJSONObject(s)?.optJSONObject("itemSectionRenderer") ?: continue
+                val items = itemSection.optJSONArray("contents") ?: continue
+                for (i in 0 until items.length()) {
+                    val entry = items.optJSONObject(i) ?: continue
+                    val directRenderer = entry.optJSONObject("videoRenderer")
+                    if (directRenderer != null) {
+                        parseVideoRenderer(directRenderer)?.let { tracks.add(it) }
+                    } else {
+                        val shelfItems = entry.optJSONObject("shelfRenderer")
+                            ?.optJSONObject("content")
+                            ?.optJSONObject("verticalListRenderer")
+                            ?.optJSONArray("items")
+                        if (shelfItems != null) {
+                            for (j in 0 until shelfItems.length()) {
+                                val nested = shelfItems.optJSONObject(j)?.optJSONObject("videoRenderer") ?: continue
+                                parseVideoRenderer(nested)?.let { tracks.add(it) }
+                                if (tracks.size >= maxResults * 2) break
+                            }
+                        }
+                    }
+                    if (tracks.size >= maxResults * 2) break
+                }
+                if (tracks.size >= maxResults * 2) break
+            }
+            RegionalContentFilter.filterTracks(deduplicateByVideoId(tracks)).take(maxResults)
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun parseVideoRenderer(vr: JSONObject): Track? {
+        val videoId = vr.optCleanString("videoId")
+        if (!RAW_VIDEO_ID_REGEX.matches(videoId)) return null
+        if (isShortsVideoRenderer(vr)) return null
+
+        val rawTitle = extractRunsOrSimpleText(vr.optJSONObject("title"))
+        if (rawTitle.isBlank()) return null
+
+        val rawAuthor = extractRunsOrSimpleText(vr.optJSONObject("ownerText"))
+            .ifBlank { extractRunsOrSimpleText(vr.optJSONObject("longBylineText")) }
+            .ifBlank { extractRunsOrSimpleText(vr.optJSONObject("shortBylineText")) }
+
+        val lengthText = extractRunsOrSimpleText(vr.optJSONObject("lengthText"))
+            .ifBlank { extractOverlayTimeText(vr) }
+        val durationSec = parseFlexibleDurationToSeconds(lengthText)
+        val isLive = durationSec == 0 && (hasLiveOverlay(vr) || hasLiveBadge(vr))
+        if (!isLive && durationSec in 1 until MIN_FULL_VIDEO_DURATION_SEC) {
+            return null
+        }
+        val finalDurationSec = when {
+            isLive -> 0
+            durationSec > 0 -> durationSec
+            else -> DEFAULT_VIDEO_DURATION_SEC
+        }
+
+        val viewDigits = extractRunsOrSimpleText(vr.optJSONObject("viewCountText"))
+            .replace(NON_DIGIT_REGEX, "")
+        val playCount = viewDigits.toLongOrNull() ?: 0L
+
+        val curated = CURATED_BY_VIDEO_ID[videoId]
+        val (cleanTitle, cleanArtist) = if (curated != null) {
+            curated.title to curated.artist
+        } else {
+            parseTitleAndArtist(rawTitle, rawAuthor)
+        }
+        val genre = curated?.genre ?: "YouTube"
+        val album = curated?.album ?: "YouTube"
+        val mood = curated?.mood.orEmpty()
+        val artistId = curated?.artistId?.takeIf { it.isNotBlank() } ?: cleanArtist
+
+        if (RegionalContentFilter.isExcludedIndianContent(
+                title = cleanTitle,
+                artist = cleanArtist,
+                genre = genre,
+                extra = "$rawTitle $rawAuthor"
+            )
+        ) {
+            return null
+        }
+
+        val defaultThumb = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+        return Track(
+            id = "yt_$videoId",
+            title = cleanTitle,
+            artist = cleanArtist,
+            artistId = artistId,
+            album = album,
+            genre = genre,
+            mood = mood,
+            durationSec = finalDurationSec,
+            artworkUrl = defaultThumb,
+            artworkMirrors = listOf("https://i.ytimg.com/vi/$videoId/maxresdefault.jpg"),
+            streamUrl = "",
+            source = TrackSource.YOUTUBE,
+            isLive = isLive,
+            isSmartPick = false,
+            playCount = playCount,
+            externalUrl = "https://www.youtube.com/watch?v=$videoId",
+            isPreviewOnly = false,
+            youtubeVideoId = videoId,
+            hasMusicVideo = true
+        )
+    }
+
+    private fun isShortsVideoRenderer(vr: JSONObject): Boolean {
+        if (vr.optJSONObject("navigationEndpoint")?.has("reelWatchEndpoint") == true) {
+            return true
+        }
+        val overlays = vr.optJSONArray("thumbnailOverlays") ?: return false
+        for (i in 0 until overlays.length()) {
+            val style = overlays.optJSONObject(i)
+                ?.optJSONObject("thumbnailOverlayTimeStatusRenderer")
+                ?.optCleanString("style")
+            if (style.equals("SHORTS", ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun extractOverlayTimeText(vr: JSONObject): String {
+        val overlays = vr.optJSONArray("thumbnailOverlays") ?: return ""
+        for (i in 0 until overlays.length()) {
+            val status = overlays.optJSONObject(i)
+                ?.optJSONObject("thumbnailOverlayTimeStatusRenderer") ?: continue
+            val text = extractRunsOrSimpleText(status.optJSONObject("text"))
+            if (text.isNotBlank()) return text
+        }
+        return ""
+    }
+
+    private fun hasLiveOverlay(vr: JSONObject): Boolean {
+        val overlays = vr.optJSONArray("thumbnailOverlays") ?: return false
+        for (i in 0 until overlays.length()) {
+            val status = overlays.optJSONObject(i)
+                ?.optJSONObject("thumbnailOverlayTimeStatusRenderer") ?: continue
+            val style = status.optCleanString("style")
+            val text = extractRunsOrSimpleText(status.optJSONObject("text"))
+            if (style.equals("LIVE", ignoreCase = true) || text.equals("LIVE", ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun hasLiveBadge(vr: JSONObject): Boolean {
+        val badges = vr.optJSONArray("badges") ?: return false
+        for (i in 0 until badges.length()) {
+            val renderer = badges.optJSONObject(i)?.optJSONObject("metadataBadgeRenderer") ?: continue
+            val style = renderer.optCleanString("style")
+            val label = renderer.optCleanString("label")
+            if (style.contains("LIVE", ignoreCase = true) || label.equals("LIVE", ignoreCase = true)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun extractRunsOrSimpleText(obj: JSONObject?): String {
+        if (obj == null) return ""
+        val simple = obj.optCleanString("simpleText")
+        if (simple.isNotBlank()) return simple
+        val runs = obj.optJSONArray("runs") ?: return ""
+        val sb = StringBuilder()
+        for (i in 0 until runs.length()) {
+            val text = runs.optJSONObject(i)?.optString("text", "").orEmpty()
+            sb.append(text)
+        }
+        return sb.toString().trim()
     }
 
     suspend fun importFromUrlOrQuery(input: String): YouTubeImportResult = withContext(Dispatchers.IO) {
@@ -935,6 +1248,11 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
 
         private const val OEMBED_ENDPOINT = "https://www.youtube.com/oembed"
         private const val RSS_ENDPOINT = "https://www.youtube.com/feeds/videos.xml"
+        private const val YOUTUBEI_SEARCH_ENDPOINT = "https://www.youtube.com/youtubei/v1/search"
+        private const val YOUTUBE_WEB_SEARCH_ENDPOINT = "https://www.youtube.com/results"
+        private const val YOUTUBE_WEB_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        private const val MIN_FULL_VIDEO_DURATION_SEC = 45
         private const val DEFAULT_VIDEO_DURATION_SEC = 210
         private const val FEED_CACHE_TTL_MS = 120_000L
         private const val INDEX_CACHE_TTL_MS = 600_000L
@@ -989,6 +1307,7 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         private val FEAT_SUFFIX_REGEX = Regex("""\s*\b(?:feat|ft)\.?\s+.*$""", RegexOption.IGNORE_CASE)
         private val DIACRITICS_REGEX = Regex("""\p{InCombiningDiacriticalMarks}+""")
         private val NON_ALNUM_REGEX = Regex("""[^a-z0-9]""")
+        private val NON_DIGIT_REGEX = Regex("""[^0-9]""")
         private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
 
         private val GENERIC_HUB_CHANNELS = setOf(

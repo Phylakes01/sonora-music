@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WifiOff
@@ -93,7 +94,7 @@ import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 
-private val HomeTopFilters = listOf("All", "PH Hits", "OPM", "Global", "Videos", "PH Radio", "Podcasts")
+private val HomeTopFilters = listOf("All", "PH Hits", "OPM", "Global", "YouTube", "PH Radio", "Podcasts")
 
 private val HomeGenres = listOf(
     "OPM",
@@ -139,7 +140,8 @@ fun HomeScreen(
 
     val isAll = activeFilter.equals("All", ignoreCase = true) ||
         activeFilter.equals("Music", ignoreCase = true)
-    val isVideos = activeFilter.equals("Videos", ignoreCase = true)
+    val isVideos = activeFilter.equals("YouTube", ignoreCase = true) ||
+        activeFilter.equals("Videos", ignoreCase = true)
     val isPhHits = activeFilter.equals("PH Hits", ignoreCase = true)
     val isOpm = activeFilter.equals("OPM", ignoreCase = true)
     val isGlobal = activeFilter.equals("Global", ignoreCase = true)
@@ -271,6 +273,7 @@ fun HomeScreen(
                                 label = filter,
                                 selected = activeFilter.equals(filter, ignoreCase = true) ||
                                     (filter == "All" && activeFilter.equals("Music", ignoreCase = true)) ||
+                                    (filter == "YouTube" && activeFilter.equals("Videos", ignoreCase = true)) ||
                                     (filter == "PH Radio" && activeFilter.equals("Radio", ignoreCase = true)),
                                 accentColor = EmeraldAccent,
                                 onClick = { actions.selectHomeFilter(filter) }
@@ -443,12 +446,18 @@ fun HomeScreen(
                 }
             }
 
-            // Official Music Videos (PH & Global) — Carousel or Full Feed when "Videos" filter is active
+            // Official Music Videos (PH & Global) — YouTube Search Bar + Carousel or Full Feed when "YouTube" filter is active
             if (showMusicVideos) {
                 if (isVideos) {
+                    item(key = "youtube_home_search_bar") {
+                        YouTubeSearchBarCard(
+                            onClick = { actions.openYouTubeSearch() },
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
                     item(key = "videos_tab_header") {
                         SonoraSectionHeader(
-                            title = "Official Music Videos (PH & Global)",
+                            title = "YouTube Music Videos (PH & Global)",
                             subtitle = "${displayedMusicVideos.size} music videos ready to stream",
                             trailingContent = {
                                 ImportYouTubeMiniChip(onClick = { actions.onOpenImportYouTube() })
@@ -487,7 +496,7 @@ fun HomeScreen(
                                 title = "Official Music Videos (PH & Global)",
                                 subtitle = "Esremborak, Mariah Deborah, The Weeknd, BINI & more",
                                 trailingContent = {
-                                    ImportYouTubeMiniChip(onClick = { actions.onOpenImportYouTube() })
+                                    SearchYouTubeMiniChip(onClick = { actions.openYouTubeSearch() })
                                 },
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
@@ -1513,6 +1522,83 @@ private fun YouTubeImportActionPill(
             Text(
                 text = "YouTube Import",
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                color = TextPrimary,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun YouTubeSearchBarCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White,
+        modifier = modifier
+            .fillMaxWidth()
+            .sonoraPressable(shape = RoundedCornerShape(8.dp), onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = ObsidianBg,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = "Search any song or video on YouTube...",
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                color = Color(0xFF535353),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Rounded.SmartDisplay,
+                contentDescription = "YouTube Search",
+                tint = YouTubeAccentTint,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchYouTubeMiniChip(
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = Color(0xFF202026),
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = Modifier.sonoraPressable(shape = CircleShape, pressedScale = 0.96f, onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = YouTubeAccentTint,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = "Search YouTube",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = TextPrimary,
                 maxLines = 1
             )

@@ -1955,4 +1955,76 @@ class DataLayerTest {
         assertTrue(byBoth.none { RegionalContentFilter.isExcludedTrack(it) })
         assertTrue(byBoth.none { it.isPreviewOnly })
     }
+
+    @Test
+    fun youTubeCatalogApi_parseYouTubeSearchJson_extractsLiveVideosSkipsShortsAndFiltersIndian() {
+        val ytApi = YouTubeCatalogApi(createCatalogMockClient())
+        val sampleJson = """
+            {
+              "contents": {
+                "twoColumnSearchResultsRenderer": {
+                  "primaryContents": {
+                    "sectionListRenderer": {
+                      "contents": [
+                        {
+                          "itemSectionRenderer": {
+                            "contents": [
+                              {
+                                "videoRenderer": {
+                                  "videoId": "hC4IW0MI8Hs",
+                                  "title": { "runs": [ { "text": "December Avenue - Bulong (OFFICIAL MUSIC VIDEO)" } ] },
+                                  "ownerText": { "runs": [ { "text": "TOWERofDOOM" } ] },
+                                  "lengthText": { "simpleText": "4:31" },
+                                  "viewCountText": { "simpleText": "12,345,678 views" }
+                                }
+                              },
+                              {
+                                "videoRenderer": {
+                                  "videoId": "shrt1234567",
+                                  "title": { "runs": [ { "text": "Bulong Short Preview" } ] },
+                                  "ownerText": { "runs": [ { "text": "ShortsClip" } ] },
+                                  "lengthText": { "simpleText": "0:28" },
+                                  "thumbnailOverlays": [
+                                    { "thumbnailOverlayTimeStatusRenderer": { "style": "SHORTS", "text": { "simpleText": "SHORTS" } } }
+                                  ]
+                                }
+                              },
+                              {
+                                "videoRenderer": {
+                                  "videoId": "ind12345678",
+                                  "title": { "runs": [ { "text": "Arijit Singh - Tum Hi Ho" } ] },
+                                  "ownerText": { "runs": [ { "text": "T-Series" } ] },
+                                  "lengthText": { "simpleText": "4:22" },
+                                  "viewCountText": { "simpleText": "500,000,000 views" }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = ytApi.parseYouTubeSearchJson(sampleJson)
+        assertEquals(1, parsed.size)
+        val track = parsed.first()
+        assertEquals("hC4IW0MI8Hs", track.youtubeVideoId)
+        assertEquals("Bulong", track.title)
+        assertEquals("December Avenue", track.artist)
+        assertEquals(271, track.durationSec)
+        assertEquals(12345678L, track.playCount)
+        assertEquals(TrackSource.YOUTUBE, track.source)
+        assertFalse(track.isPreviewOnly)
+
+        val wrappedHtml = "<html><head><script>var ytInitialData = $sampleJson; var other = {};</script></head></html>"
+        val extractedJson = ytApi.extractYtInitialDataJson(wrappedHtml)
+        assertNotNull(extractedJson)
+        val roundTrip = ytApi.parseYouTubeSearchJson(extractedJson!!)
+        assertEquals(1, roundTrip.size)
+        assertEquals("hC4IW0MI8Hs", roundTrip.first().youtubeVideoId)
+    }
 }

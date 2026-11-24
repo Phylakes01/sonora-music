@@ -26,6 +26,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -44,15 +46,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -91,7 +98,7 @@ private data class BrowseTileSpec(
 )
 
 private val BrowseTiles = listOf(
-    BrowseTileSpec("Music Videos", "Esremborak Mariah Deborah The Weeknd", SearchCategory.VIDEOS, Color(0xFF91273A)),
+    BrowseTileSpec("YouTube MVs", "Esremborak Mariah Deborah The Weeknd", SearchCategory.VIDEOS, Color(0xFF91273A)),
     BrowseTileSpec("Wish 107.5", "Wish 107.5", SearchCategory.VIDEOS, Color(0xFF28537A)),
     BrowseTileSpec("Top PH", "OPM hits", SearchCategory.SONGS, Color(0xFF1E6B45)),
     BrowseTileSpec("OPM", "Cup of Joe BINI Dionela", SearchCategory.SONGS, Color(0xFF9E4234)),
@@ -133,6 +140,13 @@ fun SearchScreen(
     modifier: Modifier = Modifier
 ) {
     val search = state.search
+    val focusManager = LocalFocusManager.current
+    val searchFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(search.searchFocusTrigger) {
+        if (search.searchFocusTrigger > 0) {
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -214,7 +228,7 @@ fun SearchScreen(
                     Box(modifier = Modifier.weight(1f)) {
                         if (search.query.isEmpty()) {
                             Text(
-                                text = "What do you want to listen to?",
+                                text = "Search songs, artists, or YouTube...",
                                 style = MaterialTheme.typography.bodyLarge.copy(
                                     fontWeight = FontWeight.Medium
                                 ),
@@ -227,12 +241,23 @@ fun SearchScreen(
                             value = search.query,
                             onValueChange = actions::updateSearchQuery,
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    focusManager.clearFocus()
+                                    if (search.query.isNotBlank()) {
+                                        actions.applyRecentSearch(search.query)
+                                    }
+                                }
+                            ),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
                                 color = ObsidianBg,
                                 fontWeight = FontWeight.Medium
                             ),
                             cursorBrush = SolidColor(ObsidianBg),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester)
                         )
                     }
                     if (search.query.isNotEmpty()) {
@@ -285,8 +310,8 @@ fun SearchScreen(
                     if (browseVideos.isNotEmpty()) {
                         item(key = "videos_browse_header") {
                             SonoraSectionHeader(
-                                title = "Official Music Videos",
-                                subtitle = "PH & Global • Tap to watch in-app",
+                                title = "YouTube Music Videos",
+                                subtitle = "Search any song or video above • Tap to play",
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
@@ -465,10 +490,8 @@ fun SearchScreen(
                     if (search.category == SearchCategory.VIDEOS && searchVideos.isNotEmpty()) {
                         item(key = "search_videos_header") {
                             SonoraSectionHeader(
-                                title = "Music Videos",
-                                subtitle = "${searchVideos.size} results",
-                                actionLabel = "+ Import",
-                                onActionClick = { actions.onOpenImportYouTube() },
+                                title = "YouTube",
+                                subtitle = "${searchVideos.size} videos • Tap to play",
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                         }
@@ -497,7 +520,7 @@ fun SearchScreen(
                         item(key = "search_all_videos_top_section") {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 SonoraSectionHeader(
-                                    title = "Music Videos",
+                                    title = "YouTube",
                                     actionLabel = if (searchVideos.size > 4) "See all" else null,
                                     onActionClick = { actions.selectSearchCategory(SearchCategory.VIDEOS) },
                                     modifier = Modifier.padding(horizontal = 16.dp)
@@ -569,7 +592,7 @@ fun SearchScreen(
                         item(key = "search_all_videos_section") {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 SonoraSectionHeader(
-                                    title = "Music Videos",
+                                    title = "YouTube",
                                     actionLabel = if (searchVideos.size > 4) "See all" else null,
                                     onActionClick = { actions.selectSearchCategory(SearchCategory.VIDEOS) },
                                     modifier = Modifier.padding(horizontal = 16.dp)
@@ -765,7 +788,7 @@ private fun BrowseCategoryTile(
         else -> Icons.Rounded.LibraryMusic
     }
     val tileTag = when (spec.category) {
-        SearchCategory.VIDEOS -> "Music Videos"
+        SearchCategory.VIDEOS -> "YouTube"
         SearchCategory.PODCASTS -> "Podcasts"
         SearchCategory.RADIO -> "Live Radio"
         else -> "Full Songs"

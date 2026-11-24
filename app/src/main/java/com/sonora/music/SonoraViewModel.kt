@@ -1219,6 +1219,22 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         _uiState.update { it.copy(search = it.search.copy(category = category)) }
     }
 
+    override fun openYouTubeSearch(initialQuery: String) {
+        _uiState.update {
+            it.copy(
+                currentTab = AppTab.SEARCH,
+                detail = it.detail.copy(route = DetailRoute.None),
+                search = it.search.copy(
+                    category = SearchCategory.VIDEOS,
+                    searchFocusTrigger = it.search.searchFocusTrigger + 1
+                )
+            )
+        }
+        if (initialQuery.isNotBlank()) {
+            applyRecentSearch(initialQuery)
+        }
+    }
+
     override fun applyRecentSearch(query: String) {
         searchJob?.cancel()
         _uiState.update { it.copy(search = it.search.copy(query = query)) }
@@ -1616,7 +1632,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             filter.equals("PH Hits", ignoreCase = true) || filter.equals("Music", ignoreCase = true) -> "PH Hits"
             filter.equals("OPM", ignoreCase = true) -> "OPM"
             filter.equals("Global", ignoreCase = true) -> "Global"
-            filter.equals("Videos", ignoreCase = true) || filter.equals("Music Videos", ignoreCase = true) -> "Videos"
+            filter.equals("YouTube", ignoreCase = true) || filter.equals("Videos", ignoreCase = true) || filter.equals("Music Videos", ignoreCase = true) -> "YouTube"
             filter.equals("PH Radio", ignoreCase = true) || filter.equals("Radio", ignoreCase = true) -> "PH Radio"
             filter.equals("Podcasts", ignoreCase = true) -> "Podcasts"
             else -> filter.ifBlank { "All" }
@@ -1628,7 +1644,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             "PH Hits" -> home.phTopTracks.isEmpty()
             "OPM" -> home.opmTracks.isEmpty()
             "Global" -> home.globalTopTracks.isEmpty()
-            "Videos" -> home.musicVideos.isEmpty()
+            "YouTube", "Videos" -> home.musicVideos.isEmpty()
             "PH Radio" -> home.liveRadio.isEmpty()
             "Podcasts" -> home.podcasts.isEmpty()
             else -> false

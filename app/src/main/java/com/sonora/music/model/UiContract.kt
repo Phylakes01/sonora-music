@@ -5,7 +5,7 @@ import androidx.compose.ui.graphics.Color
 enum class SearchCategory(val label: String) {
     ALL("All"),
     SONGS("Songs"),
-    VIDEOS("Videos"),
+    VIDEOS("YouTube"),
     ARTISTS("Artists"),
     PLAYLISTS("Playlists"),
     PODCASTS("Podcasts"),
@@ -50,7 +50,8 @@ data class SearchState(
     val aiPrompt: String = "",
     val isGeneratingAiPlaylist: Boolean = false,
     val generatedAiPlaylist: Playlist? = null,
-    val musicVideos: List<Track> = emptyList()
+    val musicVideos: List<Track> = emptyList(),
+    val searchFocusTrigger: Int = 0
 )
 
 data class LibraryState(
@@ -189,4 +190,5 @@ interface SonoraActions {
     fun onCloseImportYouTube() {}
     fun onImportYouTube(query: String) {}
     fun onImportYouTubePack(packId: String) {}
+    fun openYouTubeSearch(initialQuery: String = "") {}
 }
