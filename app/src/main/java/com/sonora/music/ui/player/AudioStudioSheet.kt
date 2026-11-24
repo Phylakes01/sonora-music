@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,9 +65,6 @@ import com.sonora.music.model.SleepTimerState
 import com.sonora.music.ui.components.SonoraSlimSlider
 import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianBg
-import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
@@ -77,13 +75,17 @@ private const val MIN_MB = -1200f
 private const val MAX_MB = 1200f
 private val SpeedOptions = listOf(0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
 private val SleepTimerMinutes = listOf(5, 15, 30, 45, 60)
-private val ChipUnselectedBg = Color(0xFF2A2A2A)
-private val SliderInactiveTrack = Color(0xFF4D4D4D)
+private val StudioSheetBg = Color(0xFF161618)
+private val StudioCardBg = Color(0xFF1E1E22)
+private val StudioCardBorder = Color(0xFF2A2A30)
+private val StudioDivider = Color(0xFF26262A)
+private val ChipUnselectedBg = Color(0xFF2A2A2F)
+private val SliderInactiveTrack = Color(0xFF4D4D52)
 
 /**
- * Matte charcoal Audio Studio sheet featuring a 5-band Equalizer with muted #1DB954
- * frequency curve, flat #2A2A2A preset chips, slim vertical faders, SonoraSlimSlider
- * dynamics controls, Sleep Timer, Playback Speed, Private Session, and Output Devices.
+ * Matte #161618 Audio Studio sheet featuring a 5-band Equalizer with #1DB954
+ * frequency curve, crisp dividers, smooth typography, dynamics controls, Sleep Timer,
+ * Playback Speed, Private Session, and Output Devices.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,16 +109,25 @@ fun AudioStudioSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = ObsidianSurface,
+        containerColor = StudioSheetBg,
         contentColor = TextPrimary,
-        dragHandle = null
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF34343A))
+            )
+        }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.92f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+                .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
@@ -146,7 +157,10 @@ fun AudioStudioSheet(
                     Column {
                         Text(
                             text = "Audio Studio",
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = (-0.3).sp
+                            ),
                             color = TextPrimary
                         )
                         Text(
@@ -165,6 +179,8 @@ fun AudioStudioSheet(
                     )
                 }
             }
+
+            HorizontalDivider(color = StudioDivider, thickness = 1.dp)
 
             // 5-Band Equalizer Card
             StudioCard {
@@ -230,7 +246,7 @@ fun AudioStudioSheet(
                         .height(104.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(ObsidianBg)
-                        .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
+                        .border(1.dp, StudioCardBorder, RoundedCornerShape(10.dp))
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -282,7 +298,11 @@ fun AudioStudioSheet(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(
+                    color = StudioDivider,
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
 
                 LabeledSlimSlider(
                     title = "Spatial Virtualizer",
@@ -294,7 +314,11 @@ fun AudioStudioSheet(
                     }
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(
+                    color = StudioDivider,
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
 
                 LabeledSlimSlider(
                     title = "Crossfade Transitions",
@@ -372,7 +396,9 @@ fun AudioStudioSheet(
                     if (sleepTimer.active) {
                         Text(
                             text = formatSleepCountdown(sleepTimer),
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontFeatureSettings = "tnum"
+                            ),
                             color = EmeraldAccent
                         )
                     }
@@ -508,7 +534,7 @@ fun AudioStudioSheet(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(if (device.isActive) ChipUnselectedBg else ObsidianBg)
-                                    .border(1.dp, ObsidianStroke, RoundedCornerShape(8.dp))
+                                    .border(1.dp, StudioCardBorder, RoundedCornerShape(8.dp))
                                     .padding(horizontal = 12.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -680,7 +706,8 @@ private fun VerticalEqSlider(
             text = dbText,
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                fontFeatureSettings = "tnum"
             ),
             color = if (enabled && dbValue != 0) activeColor else TextSecondary
         )
@@ -776,7 +803,9 @@ private fun LabeledSlimSlider(
             )
             Text(
                 text = valueLabel,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontFeatureSettings = "tnum"
+                ),
                 color = TextPrimary
             )
         }
@@ -807,7 +836,10 @@ private fun StudioChip(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontSize = 12.sp,
+                fontFeatureSettings = "tnum"
+            ),
             color = if (selected) Color.Black else TextPrimary
         )
     }
@@ -820,9 +852,9 @@ private fun StudioCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(ObsidianCard)
-            .border(1.dp, ObsidianStroke, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(StudioCardBg)
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(14.dp))
             .padding(16.dp)
     ) {
         content()

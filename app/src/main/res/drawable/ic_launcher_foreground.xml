@@ -1,39 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Outer resonant vinyl ring -->
+    <!-- Symmetrical outer acoustic echo waves -->
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#1ED760"
-        android:strokeWidth="3.5"
+        android:strokeColor="#28D96B"
         android:strokeAlpha="0.45"
-        android:pathData="M54,24 A30,30 0 1,1 53.99,24 Z" />
+        android:strokeLineCap="round"
+        android:strokeWidth="3.2"
+        android:pathData="M34,35 C31,42 32,48 36,53" />
 
-    <!-- Main luminous emerald disc -->
     <path
-        android:fillColor="#1ED760"
-        android:pathData="M54,30 A24,24 0 1,1 53.99,30 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#28D96B"
+        android:strokeAlpha="0.45"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.2"
+        android:pathData="M74,73 C77,66 76,60 72,55" />
 
-    <!-- Deep obsidian inner ring -->
+    <!-- Primary sculpted Sonora S-wave acoustic ribbon -->
     <path
-        android:fillColor="#080A0F"
-        android:pathData="M54,36 A18,18 0 1,1 53.99,36 Z" />
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7.8"
+        android:pathData="M66,36 C60,28 43,29 40,40 C38,48 46,52 54,54 C62,56 70,60 68,68 C65,79 48,80 42,72">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="38"
+                android:startY="28"
+                android:endX="70"
+                android:endY="80"
+                android:type="linear">
+                <item android:color="#39F384" android:offset="0" />
+                <item android:color="#1DB954" android:offset="0.52" />
+                <item android:color="#118E3E" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
-    <!-- Kinetic soundwave bars inside the disc -->
+    <!-- Subtle highlight harmonic spine -->
     <path
-        android:fillColor="#1ED760"
-        android:pathData="M42.5,51 L45.5,51 A1.5,1.5 0 0,1 47,52.5 L47,55.5 A1.5,1.5 0 0,1 45.5,57 L42.5,57 A1.5,1.5 0 0,1 41,55.5 L41,52.5 A1.5,1.5 0 0,1 42.5,51 Z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#B8FFE0"
+        android:strokeAlpha="0.32"
+        android:strokeLineCap="round"
+        android:strokeWidth="2.0"
+        android:pathData="M64,35 C59,29 45,30 42,39" />
+
+    <!-- Central resonant pulse node -->
     <path
-        android:fillColor="#00E5FF"
-        android:pathData="M49.5,44 L52.5,44 A1.5,1.5 0 0,1 54,45.5 L54,62.5 A1.5,1.5 0 0,1 52.5,64 L49.5,64 A1.5,1.5 0 0,1 48,62.5 L48,45.5 A1.5,1.5 0 0,1 49.5,44 Z" />
-    <path
-        android:fillColor="#1ED760"
-        android:pathData="M56.5,40 L59.5,40 A1.5,1.5 0 0,1 61,41.5 L61,66.5 A1.5,1.5 0 0,1 59.5,68 L56.5,68 A1.5,1.5 0 0,1 55,66.5 L55,41.5 A1.5,1.5 0 0,1 56.5,40 Z" />
-    <path
-        android:fillColor="#00E5FF"
-        android:pathData="M63.5,48 L66.5,48 A1.5,1.5 0 0,1 68,49.5 L68,58.5 A1.5,1.5 0 0,1 66.5,60 L63.5,60 A1.5,1.5 0 0,1 62,58.5 L62,49.5 A1.5,1.5 0 0,1 63.5,48 Z" />
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.92"
+        android:pathData="M54,50.8 A3.2,3.2 0 1,1 53.99,50.8 Z" />
 </vector>

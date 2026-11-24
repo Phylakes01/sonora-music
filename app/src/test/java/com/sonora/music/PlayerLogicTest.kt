@@ -184,4 +184,15 @@ class PlayerLogicTest {
         val midLow = AudioEffectsManager.scaleBandLevel(1, 9, fiveBands, -1500, 1500)
         assertEquals(450, midLow)
     }
+
+    @Test
+    fun isThirtySecondPreviewUrl_blocksDeezerAndItunesAndAllowsAudius() {
+        assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://cdnt-preview-1.dzcdn.net/api/1/1/abc.mp3"))
+        assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://cdns-preview-e.dzcdn.net/stream/c-123.mp3"))
+        assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://dzcdn.net/preview/test.mp3"))
+        assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://audio-ssl.itunes.apple.com/itunes-assets/test.m4a"))
+        assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://itunes.apple.com/sound/preview.m4a"))
+        assertFalse(QueueEngine.isThirtySecondPreviewUrl("https://api.audius.co/v1/tracks/J8x61Zk/stream?app_name=Sonora"))
+        assertFalse(QueueEngine.isThirtySecondPreviewUrl(""))
+    }
 }

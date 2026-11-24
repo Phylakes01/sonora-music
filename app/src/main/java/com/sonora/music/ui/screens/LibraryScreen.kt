@@ -131,7 +131,8 @@ fun LibraryScreen(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = ObsidianCard,
+                            color = Color(0xFF202024),
+                            border = BorderStroke(1.dp, Color(0xFF2B2B30)),
                             modifier = Modifier
                                 .size(36.dp)
                                 .sonoraPressable(shape = CircleShape, onClick = onOpenImportDialog)
@@ -148,7 +149,8 @@ fun LibraryScreen(
 
                         Surface(
                             shape = CircleShape,
-                            color = ObsidianCard,
+                            color = Color(0xFF202024),
+                            border = BorderStroke(1.dp, Color(0xFF2B2B30)),
                             modifier = Modifier
                                 .size(36.dp)
                                 .sonoraPressable(shape = CircleShape, onClick = onOpenCreatePlaylist)
@@ -270,8 +272,8 @@ fun LibraryScreen(
                             Box(
                                 modifier = Modifier
                                     .size(56.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(ObsidianCard),
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF202024)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -313,7 +315,7 @@ fun LibraryScreen(
                 }
             }
 
-            // Liked Preview when filtered to Liked
+            // Liked Tracks when filtered to Liked
             if (selectedFilter == LibraryFilter.LIKED && library.likedSongs.isNotEmpty()) {
                 item(key = "liked_tracks_header") {
                     SonoraSectionHeader(
@@ -343,7 +345,7 @@ fun LibraryScreen(
                 }
             }
 
-            // Downloads Preview when filtered to Downloads
+            // Downloaded Tracks when filtered to Downloads
             if (selectedFilter == LibraryFilter.DOWNLOADS && library.downloadedTracks.isNotEmpty()) {
                 item(key = "dl_tracks_header") {
                     SonoraSectionHeader(
@@ -394,8 +396,8 @@ fun LibraryScreen(
                 }
 
                 if (library.hasLocalAudioPermission && library.localTracks.isNotEmpty()) {
-                    val previewCount = if (selectedFilter == LibraryFilter.LOCAL) 15 else 4
-                    items(library.localTracks.take(previewCount), key = { "lib_local_${it.id}" }) { track ->
+                    val visibleCount = if (selectedFilter == LibraryFilter.LOCAL) 15 else 4
+                    items(library.localTracks.take(visibleCount), key = { "lib_local_${it.id}" }) { track ->
                         val isCurrent = state.playback.currentTrack?.id == track.id
                         TrackRow(
                             track = track,
@@ -434,7 +436,7 @@ private fun PinnedLibraryRow(
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(coverBrush),
             contentAlignment = Alignment.Center
         ) {
@@ -507,7 +509,7 @@ private fun UserPlaylistRow(
         SonoraArtwork(
             artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
             title = playlist.name,
-            cornerRadius = 4.dp,
+            cornerRadius = 8.dp,
             colorStart = playlist.coverColorStart,
             colorEnd = playlist.coverColorEnd,
             modifier = Modifier.size(56.dp)
@@ -559,13 +561,13 @@ private fun LocalFilesCard(
     onOpenAll: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = ObsidianSurface,
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1A1A1D),
         border = BorderStroke(1.dp, ObsidianStroke),
         modifier = Modifier
             .fillMaxWidth()
             .sonoraPressable(
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
                 onClick = if (hasPermission) onOpenAll else onRequestPermission
             )
     ) {
@@ -574,8 +576,8 @@ private fun LocalFilesCard(
                 Box(
                     modifier = Modifier
                         .size(44.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(ObsidianCard),
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF202024)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(

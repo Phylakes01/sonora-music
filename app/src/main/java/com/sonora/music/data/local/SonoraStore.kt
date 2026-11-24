@@ -17,6 +17,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Base64
+import java.util.Locale
 import java.util.UUID
 
 class SonoraStore(private val rootDir: File) {
@@ -382,6 +383,9 @@ class SonoraStore(private val rootDir: File) {
         if (id.isEmpty() || title.isEmpty()) return null
         val sourceName = obj.optClean("source")
         val source = TrackSource.entries.firstOrNull { it.name == sourceName } ?: TrackSource.DEEZER
+        val rawStreamUrl = obj.optClean("streamUrl")
+        val isLegacyPreview = isLegacyPreviewStreamUrl(rawStreamUrl)
+        val sanitizedStreamUrl = if (isLegacyPreview) "" else rawStreamUrl
 
         return Track(
             id = id,
@@ -394,7 +398,7 @@ class SonoraStore(private val rootDir: File) {
             durationSec = obj.optInt("durationSec", 0).coerceAtLeast(0),
             artworkUrl = obj.optClean("artworkUrl").ifBlank { null },
             artworkMirrors = parseStringArray(obj.optJSONArray("artworkMirrors")),
-            streamUrl = obj.optClean("streamUrl"),
+            streamUrl = sanitizedStreamUrl,
             source = source,
             isLive = obj.optBoolean("isLive", false),
             isSmartPick = obj.optBoolean("isSmartPick", false),
@@ -402,8 +406,16 @@ class SonoraStore(private val rootDir: File) {
             playCount = obj.optLong("playCount", 0L).coerceAtLeast(0L),
             localUri = obj.optClean("localUri").ifBlank { null },
             externalUrl = obj.optClean("externalUrl"),
-            isPreviewOnly = obj.optBoolean("isPreviewOnly", false)
+            isPreviewOnly = false
         )
+    }
+
+    private fun isLegacyPreviewStreamUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lower = url.lowercase(Locale.ROOT)
+        return lower.contains("dzcdn.net") ||
+            lower.contains("audio-ssl.itunes.apple.com") ||
+            lower.contains("itunes.apple.com")
     }
 
     private fun playlistToJson(playlist: Playlist): JSONObject = JSONObject().apply {

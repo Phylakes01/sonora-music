@@ -2,6 +2,7 @@ package com.sonora.music.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -28,6 +30,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Podcasts
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,8 +43,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -129,7 +136,8 @@ fun SearchScreen(
 
                 Surface(
                     shape = CircleShape,
-                    color = ObsidianCard,
+                    color = Color(0xFF202024),
+                    border = BorderStroke(1.dp, Color(0xFF2B2B30)),
                     modifier = Modifier.sonoraPressable(shape = CircleShape) {
                         actions.openAiGenerator(search.query)
                     }
@@ -142,7 +150,7 @@ fun SearchScreen(
                         Icon(
                             imageVector = Icons.Rounded.AutoAwesome,
                             contentDescription = null,
-                            tint = TextPrimary,
+                            tint = EmeraldAccent,
                             modifier = Modifier.size(15.dp)
                         )
                         Text(
@@ -570,29 +578,71 @@ private fun BrowseCategoryTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val tileIcon = when (spec.category) {
+        SearchCategory.PODCASTS -> Icons.Rounded.Podcasts
+        SearchCategory.RADIO -> Icons.Rounded.Radio
+        else -> Icons.Rounded.LibraryMusic
+    }
+    val tileTag = when (spec.category) {
+        SearchCategory.PODCASTS -> "Podcasts"
+        SearchCategory.RADIO -> "Live Radio"
+        else -> "Full Songs"
+    }
+
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(12.dp),
         color = spec.color,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
         modifier = modifier
-            .height(74.dp)
-            .sonoraPressable(shape = RoundedCornerShape(8.dp), onClick = onClick)
+            .height(82.dp)
+            .sonoraPressable(shape = RoundedCornerShape(12.dp), onClick = onClick)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            spec.color,
+                            spec.color.copy(alpha = 0.72f)
+                        )
+                    )
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
-            Text(
-                text = spec.title,
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                color = Color.White,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.align(Alignment.TopStart)
+            Icon(
+                imageVector = tileIcon,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.14f),
+                modifier = Modifier
+                    .size(46.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 6.dp, y = 8.dp)
+                    .graphicsLayer { rotationZ = 16f }
             )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(end = 28.dp)
+            ) {
+                Text(
+                    text = spec.title,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = tileTag,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                    color = Color.White.copy(alpha = 0.72f),
+                    maxLines = 1
+                )
+            }
         }
     }
 }
@@ -605,14 +655,16 @@ private fun SearchArtistCircleCard(
     Column(
         modifier = Modifier
             .width(104.dp)
-            .sonoraPressable(shape = RoundedCornerShape(8.dp), onClick = onClick),
+            .sonoraPressable(shape = RoundedCornerShape(12.dp), onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         SonoraArtwork(
             artworkUrl = artist.avatarUrl,
             title = artist.name,
             isCircle = true,
-            modifier = Modifier.size(96.dp)
+            modifier = Modifier
+                .size(96.dp)
+                .border(1.dp, Color(0xFF2B2B30), CircleShape)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
@@ -719,7 +771,7 @@ private fun SearchPlaylistRow(
         SonoraArtwork(
             artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
             title = playlist.name,
-            cornerRadius = 4.dp,
+            cornerRadius = 6.dp,
             colorStart = playlist.coverColorStart,
             colorEnd = playlist.coverColorEnd,
             modifier = Modifier.size(52.dp)
@@ -759,7 +811,7 @@ private fun SearchPodcastRow(
         SonoraArtwork(
             artworkUrl = show.artworkUrl,
             title = show.title,
-            cornerRadius = 4.dp,
+            cornerRadius = 6.dp,
             modifier = Modifier.size(52.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -797,7 +849,7 @@ private fun SearchAudiobookRow(
         SonoraArtwork(
             artworkUrl = book.artworkUrl,
             title = book.title,
-            cornerRadius = 4.dp,
+            cornerRadius = 6.dp,
             modifier = Modifier.size(52.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -829,8 +881,8 @@ private fun EmptySearchCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = ObsidianCard,
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF1A1A1D),
         border = BorderStroke(1.dp, ObsidianStroke),
         modifier = modifier.fillMaxWidth()
     ) {

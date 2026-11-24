@@ -43,6 +43,7 @@ import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.player.PlaybackController
+import com.sonora.music.player.QueueEngine
 import com.sonora.music.ui.theme.EmeraldAccent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -150,8 +151,10 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     private fun loadInitialLocalState(): Job = viewModelScope.launch(Dispatchers.IO) {
-        val playlists = store.loadPlaylists()
-        val liked = store.loadLikedSongs()
+        val playlists = store.loadPlaylists().map { pl ->
+            pl.copy(tracks = pl.tracks.map(::sanitizeTrack))
+        }
+        val liked = store.loadLikedSongs().map(::sanitizeTrack)
         val followed = store.loadFollowedArtistIds()
         val recentSearches = store.loadRecentSearches()
         val audioSettings = store.loadAudioSettings()
@@ -227,6 +230,22 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                         playback = pb,
                         detail = updatedDetail
                     )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            playbackController.errorEvents.collect { errorMsg ->
+                if (errorMsg.isNotBlank()) {
+                    showSnackbar(errorMsg)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            downloadManager.downloadErrors.collect { errorMsg ->
+                if (errorMsg.isNotBlank()) {
+                    showSnackbar(errorMsg)
                 }
             }
         }
@@ -419,8 +438,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         playbackController.playQueue(effectiveQueue, startIndex)
 
         if (!_uiState.value.audioSettings.privateSession) {
+            val cleanRecent = sanitizeTrack(track)
             _uiState.update { state ->
-                val updatedRecent = (listOf(track) + state.home.recentlyPlayed.filterNot { it.id == track.id }).take(15)
+                val updatedRecent = (listOf(cleanRecent) + state.home.recentlyPlayed.filterNot { it.id == cleanRecent.id }).take(15)
                 state.copy(home = state.home.copy(recentlyPlayed = updatedRecent))
             }
         }
@@ -712,6 +732,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun downloadTrack(track: Track) {
+        if (track.isLive || track.source == TrackSource.LOCAL) return
         downloadManager.downloadTrack(track)
         showSnackbar("Downloading \"${track.title}\" for offline playback")
     }
@@ -720,14 +741,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         val downloadable = tracks.filter {
             !it.isLive &&
                 it.source != TrackSource.LOCAL &&
-                (it.streamUrl.isNotBlank() || it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES)
+                ((it.streamUrl.isNotBlank() && !QueueEngine.isThirtySecondPreviewUrl(it.streamUrl)) ||
+                    (it.source != TrackSource.PODCAST && it.source != TrackSource.AUDIOBOOK))
         }
         if (downloadable.isEmpty()) {
-            showSnackbar("No downloadable tracks in this list")
+            showSnackbar("No downloadable full tracks in this list")
             return
         }
         downloadManager.downloadPlaylist(downloadable)
-        showSnackbar("Downloading ${downloadable.size} tracks for offline listening")
+        showSnackbar("Downloading ${downloadable.size} full tracks for offline listening")
     }
 
     override fun deleteDownload(trackId: String) {
@@ -1190,7 +1212,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun shareTrack(track: Track) {
-        val shareLink = track.externalUrl.ifBlank { track.streamUrl }
+        val safeStream = track.streamUrl.takeUnless { QueueEngine.isThirtySecondPreviewUrl(it) }.orEmpty()
+        val shareLink = track.externalUrl.ifBlank { safeStream }
         val body = buildString {
             append("Listening to \"${track.title}\" by ${track.displayArtist} on Sonora")
             if (shareLink.isNotBlank() && !track.isLive) {
@@ -1234,7 +1257,29 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun selectHomeFilter(filter: String) {
-        _uiState.update { it.copy(home = it.home.copy(selectedFilter = filter)) }
+        val normalized = when {
+            filter.equals("All", ignoreCase = true) -> "All"
+            filter.equals("PH Hits", ignoreCase = true) || filter.equals("Music", ignoreCase = true) -> "PH Hits"
+            filter.equals("OPM", ignoreCase = true) -> "OPM"
+            filter.equals("Global", ignoreCase = true) -> "Global"
+            filter.equals("PH Radio", ignoreCase = true) || filter.equals("Radio", ignoreCase = true) -> "PH Radio"
+            filter.equals("Podcasts", ignoreCase = true) -> "Podcasts"
+            else -> filter.ifBlank { "All" }
+        }
+        _uiState.update { it.copy(home = it.home.copy(selectedFilter = normalized)) }
+
+        val home = _uiState.value.home
+        val missingData = when (normalized) {
+            "PH Hits" -> home.phTopTracks.isEmpty()
+            "OPM" -> home.opmTracks.isEmpty()
+            "Global" -> home.globalTopTracks.isEmpty()
+            "PH Radio" -> home.liveRadio.isEmpty()
+            "Podcasts" -> home.podcasts.isEmpty()
+            else -> false
+        }
+        if (missingData && !home.isLoading) {
+            refreshHome()
+        }
     }
 
     override fun openFullTrackExternal(track: Track) {
@@ -1314,9 +1359,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     }.getOrDefault(emptyList())
                 }
 
-                val phTopTracks = phTopDef.await()
-                val opmTracks = opmDef.await()
-                val globalTopTracks = globalTopDef.await()
+                val phTopTracks = phTopDef.await().filter(::isNonPreviewCatalogTrack)
+                val opmTracks = opmDef.await().filter(::isNonPreviewCatalogTrack)
+                val globalTopTracks = globalTopDef.await().filter(::isNonPreviewCatalogTrack)
                 val phArtists = phArtistsDef.await()
                 val globalArtists = globalArtistsDef.await()
                 val playlists = playlistsDef.await()
@@ -1329,17 +1374,21 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 val genreTracks = when {
                     selectedGenre.equals("All", ignoreCase = true) -> phTopTracks
                     selectedGenre.equals("OPM", ignoreCase = true) -> opmTracks
-                    else -> runCatching { catalogApi.getGenreTracks(selectedGenre, limit = 30) }.getOrDefault(emptyList())
+                    else -> runCatching { catalogApi.getGenreTracks(selectedGenre, limit = 30) }
+                        .getOrDefault(emptyList())
+                        .filter(::isNonPreviewCatalogTrack)
                 }
 
                 val latestState = _uiState.value
-                val quickPicks = (
-                    latestState.home.recentlyPlayed.take(2) +
-                        latestState.library.likedSongs.take(2) +
-                        phTopTracks.take(6)
-                    )
-                    .distinctBy { it.id }
-                    .take(6)
+                val catalogPool = (phTopTracks + opmTracks + globalTopTracks).distinctBy { it.id }
+                val hydratedRecent = latestState.home.recentlyPlayed.map { hydrateTrackFromCatalog(it, catalogPool) }
+                val hydratedLiked = latestState.library.likedSongs.map { hydrateTrackFromCatalog(it, catalogPool) }
+                val quickPicks = buildVerifiedQuickPicks(
+                    recentTracks = hydratedRecent,
+                    likedTracks = hydratedLiked,
+                    phTopTracks = phTopTracks,
+                    globalTopTracks = globalTopTracks
+                )
 
                 val allRemoteEmpty = phTopTracks.isEmpty() &&
                     opmTracks.isEmpty() &&
@@ -1366,8 +1415,10 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                             podcasts = podcasts,
                             audiobooks = audiobooks,
                             liveRadio = liveRadio,
+                            recentlyPlayed = hydratedRecent,
                             errorMessage = if (allRemoteEmpty) "Offline mode — saved downloads & local tracks ready" else null
-                        )
+                        ),
+                        library = state.library.copy(likedSongs = hydratedLiked)
                     )
                 }
 
@@ -1379,17 +1430,23 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private fun preWarmQuickPicks(quickPicks: List<Track>) {
         preWarmJob?.cancel()
         val targets = quickPicks
-            .filter { it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES }
+            .filter {
+                it.streamUrl.isBlank() ||
+                    QueueEngine.isThirtySecondPreviewUrl(it.streamUrl) ||
+                    it.source == TrackSource.DEEZER ||
+                    it.source == TrackSource.ITUNES
+            }
             .take(6)
         if (targets.isEmpty()) return
 
         preWarmJob = viewModelScope.launch(Dispatchers.IO) {
+            val resolvedMap = LinkedHashMap<String, Track>()
             supervisorScope {
                 targets.chunked(2).forEach { chunk ->
-                    chunk.map { track ->
+                    val chunkResults = chunk.map { track ->
                         async {
                             try {
-                                catalogApi.resolvePlayableTrack(track)
+                                track.id to catalogApi.resolvePlayableTrack(track)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (_: Throwable) {
@@ -1397,9 +1454,93 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                             }
                         }
                     }.awaitAll()
+                    chunkResults.filterNotNull().forEach { (id, resolved) ->
+                        if (resolved.streamUrl.isNotBlank() &&
+                            !QueueEngine.isThirtySecondPreviewUrl(resolved.streamUrl)
+                        ) {
+                            resolvedMap[id] = resolved
+                        }
+                    }
+                }
+            }
+            if (resolvedMap.isNotEmpty()) {
+                _uiState.update { state ->
+                    val updatedQuick = state.home.quickPicks.map { t -> resolvedMap[t.id] ?: t }
+                    state.copy(home = state.home.copy(quickPicks = updatedQuick))
                 }
             }
         }
+    }
+
+    private fun sanitizeTrack(track: Track): Track {
+        val hasOffline = downloadManager.getOfflineFile(track.id) != null
+        val isPreviewUrl = QueueEngine.isThirtySecondPreviewUrl(track.streamUrl)
+        return if (isPreviewUrl || (track.isPreviewOnly && !hasOffline)) {
+            track.copy(
+                streamUrl = if (isPreviewUrl) "" else track.streamUrl,
+                isPreviewOnly = false
+            )
+        } else {
+            track
+        }
+    }
+
+    private fun hydrateTrackFromCatalog(track: Track, catalogPool: List<Track>): Track {
+        val clean = sanitizeTrack(track)
+        val byId = catalogPool.firstOrNull { it.id == clean.id }
+        if (byId != null && isVerifiedFullTrack(byId)) return byId
+
+        val normTitle = clean.title.trim().lowercase()
+        val normArtist = clean.artist.trim().lowercase()
+        val byMeta = catalogPool.firstOrNull { candidate ->
+            candidate.title.trim().lowercase() == normTitle &&
+                (normArtist.isBlank() ||
+                    candidate.artist.trim().lowercase().contains(normArtist) ||
+                    normArtist.contains(candidate.artist.trim().lowercase()))
+        }
+        return if (byMeta != null && isVerifiedFullTrack(byMeta)) byMeta else clean
+    }
+
+    private fun isNonPreviewCatalogTrack(track: Track): Boolean {
+        return !track.isPreviewOnly && !QueueEngine.isThirtySecondPreviewUrl(track.streamUrl)
+    }
+
+    private fun isVerifiedFullTrack(track: Track): Boolean {
+        if (track.isLive || track.source == TrackSource.LOCAL) return true
+        return !track.isPreviewOnly &&
+            track.streamUrl.isNotBlank() &&
+            !QueueEngine.isThirtySecondPreviewUrl(track.streamUrl) &&
+            (track.source == TrackSource.AUDIUS || track.durationSec >= 90)
+    }
+
+    private fun buildVerifiedQuickPicks(
+        recentTracks: List<Track>,
+        likedTracks: List<Track>,
+        phTopTracks: List<Track>,
+        globalTopTracks: List<Track>
+    ): List<Track> {
+        val verifiedRecent = recentTracks.filter(::isVerifiedFullTrack).take(2)
+        val verifiedLiked = likedTracks.filter(::isVerifiedFullTrack).take(2)
+        val phVerified = phTopTracks.filter(::isVerifiedFullTrack)
+        val globalVerified = globalTopTracks.filter(::isVerifiedFullTrack)
+
+        val blendedCatalog = buildList {
+            var phIdx = 0
+            var glIdx = 0
+            while (phIdx < phVerified.size || glIdx < globalVerified.size) {
+                repeat(2) {
+                    if (phIdx < phVerified.size) add(phVerified[phIdx++])
+                }
+                if (glIdx < globalVerified.size) add(globalVerified[glIdx++])
+            }
+            addAll(phTopTracks.filter(::isNonPreviewCatalogTrack))
+            addAll(globalTopTracks.filter(::isNonPreviewCatalogTrack))
+        }
+
+        return (verifiedRecent + verifiedLiked + blendedCatalog)
+            .filter(::isNonPreviewCatalogTrack)
+            .distinctBy { it.id }
+            .take(6)
     }
 
     override fun dismissSnackbar() {

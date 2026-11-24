@@ -1,11 +1,17 @@
 package com.sonora.music.ui.player
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -31,9 +37,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,14 +62,17 @@ import com.sonora.music.model.PlaybackState
 import com.sonora.music.ui.components.SonoraArtwork
 import com.sonora.music.ui.theme.CoralHeart
 import com.sonora.music.ui.theme.ObsidianBg
-import com.sonora.music.ui.theme.ObsidianCard
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val MiniPlayerBaseColor = Color(0xFF1F1F22)
+
 /**
- * Opaque docked MiniPlayer wrapping a clean 8.dp-rounded matte card with
- * subtle artwork tint, swipe-to-skip, heart toggle, play/pause, and 2.dp bottom progress line.
+ * Crisp solid docked MiniPlayer (#1F1F22 softly tinted with muted artwork tone),
+ * 46.dp 6.dp-radius cover, horizontal swipe-to-skip, spring play/pause,
+ * heart toggle, and crisp 2.dp bottom progress line.
  */
 @Composable
 fun MiniPlayer(
@@ -82,18 +94,41 @@ fun MiniPlayer(
     val dragOffset = remember { Animatable(0f) }
 
     val cardColor by animateColorAsState(
-        targetValue = lerp(ObsidianCard, accentColor.copy(alpha = 1f), 0.18f),
+        targetValue = lerp(MiniPlayerBaseColor, accentColor.copy(alpha = 1f), 0.16f),
         animationSpec = tween(durationMillis = 360),
         label = "mini_card_color"
     )
 
+    var likeBounce by remember { mutableStateOf(false) }
+    LaunchedEffect(likeBounce) {
+        if (likeBounce) {
+            delay(140L)
+            likeBounce = false
+        }
+    }
     val likeScale by animateFloatAsState(
-        targetValue = if (isLiked) 1.15f else 1f,
+        targetValue = if (likeBounce) 1.22f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = "mini_like_scale"
+    )
+
+    var playBounce by remember { mutableStateOf(false) }
+    LaunchedEffect(playBounce) {
+        if (playBounce) {
+            delay(120L)
+            playBounce = false
+        }
+    }
+    val playScale by animateFloatAsState(
+        targetValue = if (playBounce) 0.82f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "mini_play_spring"
     )
 
     val progressFraction = if (track.isLive) {
@@ -109,13 +144,13 @@ fun MiniPlayer(
         label = "mini_progress"
     )
 
-    val cardShape = RoundedCornerShape(8.dp)
+    val cardShape = RoundedCornerShape(10.dp)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .background(ObsidianBg)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 5.dp)
     ) {
         Column(
             modifier = Modifier
@@ -159,15 +194,15 @@ fun MiniPlayer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 7.dp)
+                    .padding(horizontal = 9.dp, vertical = 7.dp)
                     .graphicsLayer { translationX = dragOffset.value * 0.40f },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 SonoraArtwork(
                     artworkUrl = track.artworkUrl,
                     title = track.title,
-                    cornerRadius = 4.dp,
-                    modifier = Modifier.size(44.dp)
+                    cornerRadius = 6.dp,
+                    modifier = Modifier.size(46.dp)
                 )
 
                 Spacer(modifier = Modifier.width(10.dp))
@@ -198,6 +233,7 @@ fun MiniPlayer(
 
                 IconButton(
                     onClick = {
+                        likeBounce = true
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onToggleLike()
                     },
@@ -215,10 +251,13 @@ fun MiniPlayer(
 
                 IconButton(
                     onClick = {
+                        playBounce = true
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onTogglePlayPause()
                     },
-                    modifier = Modifier.size(38.dp)
+                    modifier = Modifier
+                        .size(40.dp)
+                        .scale(playScale)
                 ) {
                     if (playback.isBuffering) {
                         CircularProgressIndicator(
@@ -227,17 +266,26 @@ fun MiniPlayer(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        Icon(
-                            imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (playback.isPlaying) "Pause" else "Play",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
+                        AnimatedContent(
+                            targetState = playback.isPlaying,
+                            transitionSpec = {
+                                (scaleIn(initialScale = 0.78f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(tween(120))) togetherWith
+                                    (scaleOut(targetScale = 0.78f, animationSpec = tween(100)) + fadeOut(tween(100)))
+                            },
+                            label = "mini_play_icon"
+                        ) { playing ->
+                            Icon(
+                                imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (playing) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            // Ultra-thin 2.dp white progress line on bottom edge
+            // Crisp 2.dp white progress line on bottom edge
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

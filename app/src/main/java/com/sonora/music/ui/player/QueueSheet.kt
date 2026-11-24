@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.GroupAdd
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,15 +49,17 @@ import com.sonora.music.model.Track
 import com.sonora.music.ui.components.AnimatedPlayingBars
 import com.sonora.music.ui.components.SonoraArtwork
 import com.sonora.music.ui.theme.EmeraldAccent
-import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 
+private val QueueSheetBg = Color(0xFF161618)
+private val QueueCardBg = Color(0xFF1E1E22)
+private val QueueCardBorder = Color(0xFF2A2A30)
+private val QueueDivider = Color(0xFF26262A)
+
 /**
- * Clean matte #181818 Queue & Jam sheet displaying Now Playing and Up Next tracks.
+ * Refined matte #161618 Queue & Jam sheet displaying Now Playing and Up Next tracks.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,15 +85,23 @@ fun QueueSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = ObsidianSurface,
+        containerColor = QueueSheetBg,
         contentColor = TextPrimary,
-        dragHandle = null
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF34343A))
+            )
+        }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.86f)
-                .padding(horizontal = 18.dp, vertical = 16.dp)
+                .padding(horizontal = 18.dp, vertical = 12.dp)
         ) {
             // Top bar
             Row(
@@ -100,12 +112,17 @@ fun QueueSheet(
                 Column {
                     Text(
                         text = "Queue",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.3).sp
+                        ),
                         color = TextPrimary
                     )
                     Text(
                         text = "${upNextTracks.size} up next",
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFeatureSettings = "tnum"
+                        ),
                         color = TextSecondary
                     )
                 }
@@ -117,7 +134,7 @@ fun QueueSheet(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(Color(0xFF2A2A2A))
+                            .background(Color(0xFF28282E))
                             .clickable(onClick = onOpenJamShare)
                             .padding(horizontal = 12.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -146,7 +163,9 @@ fun QueueSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = QueueDivider, thickness = 1.dp)
+            Spacer(modifier = Modifier.height(12.dp))
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -159,7 +178,7 @@ fun QueueSheet(
                             text = "NOW PLAYING",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
+                                letterSpacing = 1.1.sp
                             ),
                             color = TextSecondary
                         )
@@ -169,9 +188,9 @@ fun QueueSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(ObsidianCard)
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(QueueCardBg)
+                                .border(1.dp, QueueCardBorder, RoundedCornerShape(12.dp))
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -179,7 +198,7 @@ fun QueueSheet(
                                 artworkUrl = currentTrack.artworkUrl,
                                 title = currentTrack.title,
                                 modifier = Modifier.size(48.dp),
-                                cornerRadius = 4.dp
+                                cornerRadius = 6.dp
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
@@ -205,13 +224,21 @@ fun QueueSheet(
                             )
                         }
                     }
+
+                    item(key = "queue_section_divider") {
+                        HorizontalDivider(
+                            color = QueueDivider,
+                            thickness = 1.dp,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
                 }
 
                 item(key = "up_next_header") {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp),
+                            .padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -219,7 +246,7 @@ fun QueueSheet(
                             text = "UP NEXT",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
+                                letterSpacing = 1.1.sp
                             ),
                             color = TextSecondary
                         )
@@ -248,9 +275,9 @@ fun QueueSheet(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(ObsidianCard)
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(QueueCardBg)
+                                .border(1.dp, QueueCardBorder, RoundedCornerShape(12.dp))
                                 .padding(22.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -273,8 +300,9 @@ fun QueueSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(ObsidianCard)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(QueueCardBg)
+                                .border(1.dp, QueueCardBorder, RoundedCornerShape(12.dp))
                                 .clickable { onPlayTrackInQueue(track, playback.queue) }
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -283,7 +311,7 @@ fun QueueSheet(
                                 artworkUrl = track.artworkUrl,
                                 title = track.title,
                                 modifier = Modifier.size(44.dp),
-                                cornerRadius = 4.dp
+                                cornerRadius = 6.dp
                             )
 
                             Spacer(modifier = Modifier.width(10.dp))
@@ -304,7 +332,10 @@ fun QueueSheet(
                                             append(" · ${track.formattedDuration}")
                                         }
                                     },
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = 12.sp,
+                                        fontFeatureSettings = "tnum"
+                                    ),
                                     color = if (track.isSmartPick) EmeraldAccent else TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis

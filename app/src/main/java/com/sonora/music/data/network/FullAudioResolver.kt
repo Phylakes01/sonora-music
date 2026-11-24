@@ -15,9 +15,9 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /**
- * Resolves full-length playable audio streams via Audius for catalog tracks
- * (Deezer/iTunes), strictly validating title/artist/duration/noise and probing
- * stream headers before upgrading from 30s previews.
+ * Resolves full-length playable audio streams via Audius for catalog tracks,
+ * strictly validating title/artist/duration and probing stream headers before
+ * upgrading. Never falls back to 30-second Deezer or iTunes preview URLs.
  */
 class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.client) {
 
@@ -30,15 +30,19 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             .build()
     }
 
-    suspend fun resolveFullTrack(
-        track: Track,
-        fallbackPreviewUrl: suspend () -> String
-    ): Track = withContext(Dispatchers.IO) {
+    suspend fun resolveFullTrackOrNull(track: Track): Track? = withContext(Dispatchers.IO) {
         if (!track.localUri.isNullOrBlank() ||
             track.isLive ||
-            track.source in BYPASS_SOURCES
+            track.source in ALWAYS_BYPASS_SOURCES
         ) {
             return@withContext track
+        }
+
+        if (track.source == TrackSource.AUDIUS &&
+            track.streamUrl.startsWith("http", ignoreCase = true) &&
+            !isPreviewAudioUrl(track.streamUrl)
+        ) {
+            return@withContext track.copy(isPreviewOnly = false)
         }
 
         val cacheKey = track.id.trim()
@@ -50,23 +54,84 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
         val cleanArtist = cleanArtistText(track.artist)
         val firstArtist = extractFirstArtist(cleanArtist)
 
-        val candidates = if (cleanTitle.isNotBlank()) {
+        val combined = LinkedHashMap<String, AudiusCandidate>()
+        var ranked: List<Pair<AudiusCandidate, Int>> = emptyList()
+
+        if (cleanTitle.isNotBlank()) {
             val primaryQuery = listOf(cleanTitle, cleanArtist)
                 .filter { it.isNotBlank() }
                 .joinToString(" ")
-            var hits = searchAudiusCandidates(primaryQuery)
-            if (hits.isEmpty() &&
+            mergeCandidates(combined, searchAudiusCandidates(primaryQuery))
+            ranked = rankCandidates(track, combined.values.toList())
+
+            if (ranked.none { it.second >= CLEAN_ORIGINAL_THRESHOLD } &&
                 firstArtist.isNotBlank() &&
                 !firstArtist.equals(cleanArtist, ignoreCase = true)
             ) {
-                hits = searchAudiusCandidates("$cleanTitle $firstArtist")
+                mergeCandidates(combined, searchAudiusCandidates("$cleanTitle $firstArtist"))
+                ranked = rankCandidates(track, combined.values.toList())
             }
-            hits
-        } else {
-            emptyList()
+
+            val artistNoArticle = stripLeadingArticle(firstArtist.ifBlank { cleanArtist })
+            if (ranked.none { it.second >= CLEAN_ORIGINAL_THRESHOLD } &&
+                artistNoArticle.isNotBlank() &&
+                !artistNoArticle.equals(firstArtist, ignoreCase = true) &&
+                !artistNoArticle.equals(cleanArtist, ignoreCase = true)
+            ) {
+                mergeCandidates(combined, searchAudiusCandidates("$cleanTitle $artistNoArticle"))
+                ranked = rankCandidates(track, combined.values.toList())
+            }
+
+            if (ranked.isEmpty() && cleanTitle.length >= 6) {
+                mergeCandidates(combined, searchAudiusCandidates(cleanTitle))
+                ranked = rankCandidates(track, combined.values.toList())
+            }
         }
 
-        val ranked = candidates
+        for ((candidate, _) in ranked) {
+            val audiusStreamUrl =
+                "$PRIMARY_HOST/v1/tracks/${encodePathSegment(candidate.id)}/stream?app_name=$APP_NAME"
+            if (probeAudioStream(audiusStreamUrl)) {
+                val resolved = track.copy(
+                    streamUrl = audiusStreamUrl,
+                    durationSec = candidate.durationSec.coerceAtLeast(track.durationSec),
+                    source = TrackSource.AUDIUS,
+                    isPreviewOnly = false
+                )
+                if (cacheKey.isNotEmpty()) {
+                    resolvedCache[cacheKey] = resolved
+                }
+                return@withContext resolved
+            }
+        }
+
+        null
+    }
+
+    suspend fun resolveFullTrack(
+        track: Track,
+        @Suppress("UNUSED_PARAMETER") fallbackPreviewUrl: suspend () -> String = { "" }
+    ): Track = resolveFullTrackOrNull(track) ?: track.copy(
+        streamUrl = "",
+        isPreviewOnly = false
+    )
+
+    private fun mergeCandidates(
+        target: LinkedHashMap<String, AudiusCandidate>,
+        incoming: List<AudiusCandidate>
+    ) {
+        for (candidate in incoming) {
+            if (!target.containsKey(candidate.id)) {
+                target[candidate.id] = candidate
+            }
+        }
+    }
+
+    private fun rankCandidates(
+        track: Track,
+        candidates: List<AudiusCandidate>
+    ): List<Pair<AudiusCandidate, Int>> =
+        candidates
             .map { candidate ->
                 val score = scoreCandidate(
                     targetTitle = track.title,
@@ -75,7 +140,8 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
                     candidateTitle = candidate.title,
                     candidateUploader = candidate.uploader,
                     candidateDurationSec = candidate.durationSec,
-                    isStreamable = candidate.isStreamable
+                    isStreamable = candidate.isStreamable,
+                    candidateDescription = candidate.description
                 )
                 candidate to score
             }
@@ -89,40 +155,6 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             )
             .take(MAX_PROBE_CANDIDATES)
 
-        for ((candidate, _) in ranked) {
-            val audiusStreamUrl =
-                "$PRIMARY_HOST/v1/tracks/${encodePathSegment(candidate.id)}/stream?app_name=$APP_NAME"
-            if (probeAudioStream(audiusStreamUrl)) {
-                val resolved = track.copy(
-                    streamUrl = audiusStreamUrl,
-                    durationSec = candidate.durationSec.coerceAtLeast(track.durationSec),
-                    isPreviewOnly = false
-                )
-                if (cacheKey.isNotEmpty()) {
-                    resolvedCache[cacheKey] = resolved
-                }
-                return@withContext resolved
-            }
-        }
-
-        val freshPreview = try {
-            fallbackPreviewUrl().trim().ifBlank { track.streamUrl }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            track.streamUrl
-        }
-
-        val fallback = track.copy(
-            streamUrl = freshPreview,
-            isPreviewOnly = true
-        )
-        if (cacheKey.isNotEmpty()) {
-            resolvedCache[cacheKey] = fallback
-        }
-        fallback
-    }
-
     fun scoreCandidate(
         targetTitle: String,
         targetArtist: String,
@@ -130,7 +162,8 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
         candidateTitle: String,
         candidateUploader: String,
         candidateDurationSec: Int,
-        isStreamable: Boolean
+        isStreamable: Boolean,
+        candidateDescription: String = ""
     ): Int {
         if (!isStreamable || candidateDurationSec < MIN_FULL_DURATION_SEC) {
             return -1000
@@ -156,11 +189,12 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
         val primaryArtistTokens = tokenize(stripParensAndFeatures(primaryArtistRaw))
             .ifEmpty { tokenize(stripParensAndFeatures(targetArtist)) }
         val allArtistTokens = tokenize(stripParensAndFeatures(targetArtist))
+        val candidateArtistSearchTokens = tokenize(stripParensOnly(candidateTitle))
         val candidateUploaderTokens = tokenize(stripParensAndFeatures(candidateUploader))
-        val candidateCombinedSet = candidateTitleSet + candidateUploaderTokens
+        val candidateCombinedSet = candidateTitleSet + candidateArtistSearchTokens + candidateUploaderTokens
 
         val joinedPrimaryArtist = primaryArtistTokens.joinToString("")
-        val candidateTitleNoSpaces = candidateTitleTokens.joinToString("")
+        val candidateTitleNoSpaces = candidateArtistSearchTokens.joinToString("")
         val candidateUploaderNoSpaces = candidateUploaderTokens.joinToString("")
         val joinedArtistMatch = joinedPrimaryArtist.length >= 4 && (
             candidateTitleNoSpaces.contains(joinedPrimaryArtist) ||
@@ -177,15 +211,24 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
 
         val normFullTarget = normalizeText(targetTitle)
         val normFullCandidate = normalizeText(candidateTitle)
-        val hasUnexpectedNoise = NOISE_REGEXES.any { regex ->
+        val normDesc = normalizeText(candidateDescription)
+        val isUnexpectedHardNoise = HARD_REJECT_NOISE_REGEXES.any { regex ->
             regex.containsMatchIn(normFullCandidate) && !regex.containsMatchIn(normFullTarget)
+        } || DESC_HARD_REJECT_REGEXES.any { regex ->
+            regex.containsMatchIn(normDesc) && !regex.containsMatchIn(normFullTarget)
         }
-        val cleanPreferenceScore = if (hasUnexpectedNoise) -35 else 50
+        if (isUnexpectedHardNoise) {
+            return -500
+        }
+        val isUnexpectedVariant = VARIANT_REGEXES.any { regex ->
+            regex.containsMatchIn(normFullCandidate) && !regex.containsMatchIn(normFullTarget)
+        } || (DESC_COVER_BY_REGEX.containsMatchIn(normDesc) && !DESC_COVER_BY_REGEX.containsMatchIn(normFullTarget))
+        val cleanPreferenceScore = if (isUnexpectedVariant) 20 else 60
 
-        val titleBonus = if (candidateTitleTokens == targetTitleTokens) {
-            15
-        } else {
-            (titleOverlap * 10.0).toInt()
+        val titleBonus = when {
+            candidateTitleTokens == targetTitleTokens -> 20
+            matchedTitleCount == targetTitleTokens.size -> 15
+            else -> (titleOverlap * 10.0).toInt()
         }
 
         val uploaderMatched = primaryArtistTokens.any { it in candidateUploaderTokens } ||
@@ -248,6 +291,7 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             val accessStreamable = obj.optJSONObject("access")?.optBoolean("stream", true) ?: true
             val isStreamable = obj.optBoolean("is_streamable", true) && accessStreamable
             val durationSec = obj.optInt("duration", 0).coerceAtLeast(0)
+            val description = obj.optCleanString("description")
 
             add(
                 AudiusCandidate(
@@ -255,7 +299,8 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
                     title = title,
                     uploader = uploader,
                     durationSec = durationSec,
-                    isStreamable = isStreamable
+                    isStreamable = isStreamable,
+                    description = description
                 )
             )
         }
@@ -311,10 +356,15 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             .orEmpty()
     }
 
-    private fun stripParensAndFeatures(raw: String): String =
+    private fun stripLeadingArticle(raw: String): String =
+        raw.replace(LEADING_ARTICLE_REGEX, "").trim()
+
+    private fun stripParensOnly(raw: String): String =
         raw.replace(PAREN_REGEX, " ")
             .replace(BRACKET_REGEX, " ")
-            .replace(FEAT_SUFFIX_REGEX, "")
+
+    private fun stripParensAndFeatures(raw: String): String =
+        stripParensOnly(raw).replace(FEAT_SUFFIX_REGEX, "")
 
     private fun normalizeText(raw: String): String {
         if (raw.isBlank()) return ""
@@ -341,27 +391,28 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
         val title: String,
         val uploader: String,
         val durationSec: Int,
-        val isStreamable: Boolean
+        val isStreamable: Boolean,
+        val description: String = ""
     )
 
     companion object {
         private const val PRIMARY_HOST = "https://api.audius.co"
         private const val FALLBACK_HOST = "https://discoveryprovider.audius.co"
         private const val APP_NAME = "Sonora"
-        private const val SEARCH_LIMIT = 10
+        private const val SEARCH_LIMIT = 25
         private const val MAX_PROBE_CANDIDATES = 3
         private const val MIN_FULL_DURATION_SEC = 90
         private const val MIN_MULTI_TOKEN_OVERLAP = 0.55
-        private const val ACCEPT_THRESHOLD = 45
+        private const val ACCEPT_THRESHOLD = 35
+        private const val CLEAN_ORIGINAL_THRESHOLD = 75
 
         private val HOSTS = listOf(PRIMARY_HOST, FALLBACK_HOST)
 
-        private val BYPASS_SOURCES = setOf(
+        private val ALWAYS_BYPASS_SOURCES = setOf(
             TrackSource.LOCAL,
             TrackSource.PODCAST,
             TrackSource.AUDIOBOOK,
-            TrackSource.RADIO,
-            TrackSource.AUDIUS
+            TrackSource.RADIO
         )
 
         private val FILLER_WORDS = setOf(
@@ -378,25 +429,74 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             """\s*,\s*|\s+&\s+|\s*/\s*|\s*;\s*|\s+\b(?:feat\.?|ft\.?|with|x)\b\s+""",
             RegexOption.IGNORE_CASE
         )
+        private val LEADING_ARTICLE_REGEX = Regex(
+            """^(?:the|a|an)\s+""",
+            RegexOption.IGNORE_CASE
+        )
         private val DIACRITICS_REGEX = Regex("""\p{InCombiningDiacriticalMarks}+""")
         private val NON_ALNUM_REGEX = Regex("""[^a-z0-9]""")
         private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
 
-        private val NOISE_REGEXES = listOf(
+        private val HARD_REJECT_NOISE_REGEXES = listOf(
+            Regex("""\bkaraoke\b"""),
+            Regex("""\binstrumental\b"""),
+            Regex("""\btype\s*beat\b"""),
+            Regex("""\bai\s*cover\b"""),
+            Regex("""\bscrewed\b"""),
+            Regex("""\bchopped\b"""),
+            Regex("""\bscrewed\s*n\s*chopped\b"""),
+            Regex("""\bparody\b"""),
+            Regex("""\bminus\s*\d+\b""")
+        )
+
+        private val DESC_HARD_REJECT_REGEXES = listOf(
+            Regex("""\bpandastudio\b"""),
+            Regex("""\bkaraoke\b"""),
+            Regex("""\binstrumental\b"""),
+            Regex("""\bshit\s*microphone\b""")
+        )
+
+        private val DESC_COVER_BY_REGEX = Regex("""\bcover\s+by\b""")
+
+        private val VARIANT_REGEXES = listOf(
             Regex("""\bremix(?:ed|es)?\b"""),
+            Regex("""\brmx\b"""),
+            Regex("""\bedit\b"""),
+            Regex("""\bcover\b"""),
+            Regex("""\bflip\b"""),
+            Regex("""\blive\b"""),
             Regex("""\bsped\s*up\b"""),
             Regex("""\bslowed\b"""),
             Regex("""\bnightcore\b"""),
             Regex("""\b8d\b"""),
             Regex("""\breverb(?:ed)?\b"""),
-            Regex("""\bkaraoke\b"""),
-            Regex("""\binstrumental\b"""),
+            Regex("""\brework\b"""),
+            Regex("""\brefix\b"""),
+            Regex("""\breblend\b"""),
+            Regex("""\bdrill(?:[\s-]*mix)?\b"""),
+            Regex("""\bviolin\b"""),
+            Regex("""\bpiano\b"""),
             Regex("""\bmashup\b"""),
-            Regex("""\bcover\b"""),
+            Regex("""\bmash[\s-]*up\b"""),
             Regex("""\bclub\s*mix\b"""),
+            Regex("""\bvelocity\s*mix\b"""),
             Regex("""\bbootleg\b"""),
-            Regex("""\bedit\b"""),
+            Regex("""\bboot\b"""),
+            Regex("""\bfreestyle\b"""),
+            Regex("""\blofi\b"""),
+            Regex("""\blo[\s-]*fi\b"""),
+            Regex("""\bacoustic\b"""),
+            Regex("""\bextended\b"""),
+            Regex("""\bvs\b"""),
             Regex("""\bbossa\b""")
         )
+
+        internal fun isPreviewAudioUrl(url: String): Boolean {
+            if (url.isBlank()) return false
+            val lower = url.lowercase(Locale.ROOT)
+            return lower.contains("dzcdn.net") ||
+                lower.contains("audio-ssl.itunes.apple.com") ||
+                lower.contains("itunes.apple.com")
+        }
     }
 }

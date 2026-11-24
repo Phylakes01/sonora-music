@@ -1,14 +1,20 @@
 package com.sonora.music.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,11 +32,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Icon
@@ -39,11 +47,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,19 +75,20 @@ import com.sonora.music.ui.components.AnimatedPlayingBars
 import com.sonora.music.ui.components.ShimmerCardPlaceholder
 import com.sonora.music.ui.components.ShimmerRowPlaceholder
 import com.sonora.music.ui.components.SonoraArtwork
+import com.sonora.music.ui.components.SonoraBrandLogo
 import com.sonora.music.ui.components.SonoraPillChip
 import com.sonora.music.ui.components.SonoraSectionHeader
 import com.sonora.music.ui.components.TrackRow
+import com.sonora.music.ui.components.rememberSonoraShimmerBrush
 import com.sonora.music.ui.components.sonoraPressable
 import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianBg
-import com.sonora.music.ui.theme.ObsidianCard
 import com.sonora.music.ui.theme.ObsidianStroke
 import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 
-private val HomeTopFilters = listOf("All", "Music", "OPM", "Podcasts", "Radio")
+private val HomeTopFilters = listOf("All", "PH Hits", "OPM", "Global", "PH Radio", "Podcasts")
 
 private val HomeGenres = listOf(
     "OPM",
@@ -85,9 +98,12 @@ private val HomeGenres = listOf(
     "R&B",
     "K-Pop",
     "Rock",
-    "Chill",
-    "Throwback OPM"
+    "Chill"
 )
+
+private val QuickAccessTileBg = Color(0xFF202024)
+private val HeaderButtonBg = Color(0xFF202024)
+private val HeaderButtonBorder = Color(0xFF2B2B30)
 
 @Composable
 fun HomeScreen(
@@ -98,16 +114,47 @@ fun HomeScreen(
 ) {
     val home = state.home
     val activeFilter = home.selectedFilter.ifBlank { "All" }
-    val showMusic = activeFilter.equals("All", ignoreCase = true) ||
+
+    val isAll = activeFilter.equals("All", ignoreCase = true) ||
         activeFilter.equals("Music", ignoreCase = true)
-    val showOpm = activeFilter.equals("All", ignoreCase = true) ||
-        activeFilter.equals("OPM", ignoreCase = true)
-    val showPodcasts = activeFilter.equals("All", ignoreCase = true) ||
-        activeFilter.equals("Podcasts", ignoreCase = true)
-    val showRadio = activeFilter.equals("All", ignoreCase = true) ||
+    val isPhHits = activeFilter.equals("PH Hits", ignoreCase = true)
+    val isOpm = activeFilter.equals("OPM", ignoreCase = true)
+    val isGlobal = activeFilter.equals("Global", ignoreCase = true)
+    val isRadio = activeFilter.equals("PH Radio", ignoreCase = true) ||
         activeFilter.equals("Radio", ignoreCase = true)
+    val isPodcasts = activeFilter.equals("Podcasts", ignoreCase = true)
+
+    val showSpotlightAndQuickGrid = isAll || isPhHits || isOpm || isGlobal
+    val showPhArtists = isAll || isPhHits || isOpm
+    val showPhTop = isAll || isPhHits
+    val showOpm = isAll || isPhHits || isOpm
+    val showGlobal = isAll || isGlobal
+    val showMadeForYou = isAll || isPhHits || isGlobal
+    val showGenresAndCharts = isAll || isPhHits || isOpm || isGlobal
+    val showRadio = isAll || isRadio
+    val showPodcasts = isAll || isPodcasts
+    val showRecent = isAll || isPhHits || isOpm || isGlobal
 
     val phTopTracks = home.phTopTracks.ifEmpty { home.trendingTracks }
+
+    val spotlightQueue = remember(activeFilter, phTopTracks, home.opmTracks, home.globalTopTracks, home.quickPicks) {
+        when {
+            isOpm -> home.opmTracks.ifEmpty { phTopTracks }
+            isGlobal -> home.globalTopTracks.ifEmpty { phTopTracks }
+            isPhHits -> phTopTracks.ifEmpty { home.quickPicks }
+            else -> phTopTracks.ifEmpty { home.opmTracks }.ifEmpty { home.quickPicks }.ifEmpty { home.globalTopTracks }
+        }
+    }
+    val spotlightTrack = spotlightQueue.firstOrNull()
+
+    val quickAccessTracks = remember(activeFilter, home.quickPicks, home.opmTracks, home.globalTopTracks, phTopTracks) {
+        when {
+            isOpm -> home.opmTracks.ifEmpty { home.quickPicks }
+            isGlobal -> home.globalTopTracks.ifEmpty { home.quickPicks }
+            isPhHits -> phTopTracks.ifEmpty { home.quickPicks }
+            else -> home.quickPicks
+        }.take(6)
+    }
 
     Box(
         modifier = modifier
@@ -119,121 +166,121 @@ fun HomeScreen(
                 .fillMaxSize()
                 .statusBarsPadding(),
             contentPadding = PaddingValues(top = 12.dp, bottom = 148.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(22.dp)
         ) {
-            // Compact Top Filter Row + Audio EQ & Listening Stats Icons
-            item(key = "home_top_bar") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            // Brand Header Row + Unclipped Horizontal Filter Pills Row
+            item(key = "home_header_block") {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        HomeTopFilters.forEach { filter ->
-                            SonoraPillChip(
-                                label = filter,
-                                selected = activeFilter.equals(filter, ignoreCase = true),
-                                accentColor = EmeraldAccent,
-                                onClick = { actions.selectHomeFilter(filter) }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            SonoraBrandLogo(size = 30.dp)
+                            Text(
+                                text = "Sonora",
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.4).sp
+                                ),
+                                color = TextPrimary,
+                                maxLines = 1
+                            )
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            HeaderIconCircleButton(
+                                icon = Icons.Rounded.Tune,
+                                contentDescription = "Audio Studio",
+                                onClick = { actions.openAudioStudio() }
+                            )
+                            HeaderIconCircleButton(
+                                icon = Icons.Rounded.BarChart,
+                                contentDescription = "Listening Stats",
+                                onClick = { actions.openWrapped() }
+                            )
+                            RefreshHeaderButton(
+                                isRefreshing = home.isLoading,
+                                onClick = { actions.refreshHome() }
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Row(
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = ObsidianCard,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .sonoraPressable(shape = CircleShape) {
-                                    actions.openAudioStudio()
-                                }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Tune,
-                                    contentDescription = "Audio Equalizer",
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        Surface(
-                            shape = CircleShape,
-                            color = ObsidianCard,
-                            modifier = Modifier
-                                .size(36.dp)
-                                .sonoraPressable(shape = CircleShape) {
-                                    actions.openWrapped()
-                                }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Rounded.BarChart,
-                                    contentDescription = "Listening Stats",
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
+                        items(HomeTopFilters, key = { it }) { filter ->
+                            SonoraPillChip(
+                                label = filter,
+                                selected = activeFilter.equals(filter, ignoreCase = true) ||
+                                    (filter == "All" && activeFilter.equals("Music", ignoreCase = true)) ||
+                                    (filter == "PH Radio" && activeFilter.equals("Radio", ignoreCase = true)),
+                                accentColor = EmeraldAccent,
+                                onClick = { actions.selectHomeFilter(filter) }
+                            )
                         }
                     }
                 }
             }
 
             // Offline Banner
-            item(key = "offline_banner") {
-                AnimatedVisibility(
-                    visible = home.isOffline,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = ObsidianSurface,
-                        border = BorderStroke(1.dp, ObsidianStroke),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+            if (home.isOffline) {
+                item(key = "offline_banner") {
+                    AnimatedVisibility(
+                        visible = home.isOffline,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = ObsidianSurface,
+                            border = BorderStroke(1.dp, ObsidianStroke),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.WifiOff,
-                                contentDescription = null,
-                                tint = TextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Offline",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = TextPrimary
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.WifiOff,
+                                    contentDescription = null,
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
-                                Text(
-                                    text = "Play your downloads and local audio files.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary
-                                )
-                            }
-                            TextButton(onClick = { actions.openDetail(DetailRoute.Downloads) }) {
-                                Text("Downloads", color = EmeraldAccent, fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Offline",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = TextPrimary
+                                    )
+                                    Text(
+                                        text = "Play your downloads and local audio files.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextSecondary
+                                    )
+                                }
+                                TextButton(onClick = { actions.openDetail(DetailRoute.Downloads) }) {
+                                    Text("Downloads", color = EmeraldAccent, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                     }
@@ -244,7 +291,7 @@ fun HomeScreen(
             if (!home.errorMessage.isNullOrBlank() && !home.isOffline) {
                 item(key = "error_banner") {
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = ObsidianSurface,
                         border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier
@@ -272,10 +319,19 @@ fun HomeScreen(
             // Initial Shimmer Skeleton
             if (home.isLoading && home.quickPicks.isEmpty() && phTopTracks.isEmpty()) {
                 item(key = "home_shimmer") {
+                    val shimmerBrush = rememberSonoraShimmerBrush()
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(18.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                                .height(176.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(shimmerBrush)
+                        )
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             repeat(4) { ShimmerRowPlaceholder() }
                         }
@@ -289,11 +345,32 @@ fun HomeScreen(
                 }
             }
 
-            // 2-Column Flat Quick Access Tiles (max 6 items)
-            if ((showMusic || showOpm) && home.quickPicks.isNotEmpty()) {
+            // Editorial Spotlight Hero Card
+            if (showSpotlightAndQuickGrid && spotlightTrack != null) {
+                item(key = "editorial_spotlight_${activeFilter}") {
+                    val isCurrent = state.playback.currentTrack?.id == spotlightTrack.id
+                    EditorialSpotlightHeroCard(
+                        track = spotlightTrack,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        onCardClick = { actions.playTrack(spotlightTrack, spotlightQueue) },
+                        onPlayToggle = {
+                            if (isCurrent) {
+                                actions.togglePlayPause()
+                            } else {
+                                actions.playTrack(spotlightTrack, spotlightQueue)
+                            }
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+            }
+
+            // 2-Column Quick Access Grid (6 items, 56.dp flush square art, rounded-6dp #202024 tiles)
+            if (showSpotlightAndQuickGrid && quickAccessTracks.isNotEmpty()) {
                 item(key = "quick_access") {
-                    val pairs = remember(home.quickPicks) {
-                        home.quickPicks.take(6).chunked(2)
+                    val pairs = remember(quickAccessTracks) {
+                        quickAccessTracks.chunked(2)
                     }
                     Column(
                         modifier = Modifier
@@ -312,7 +389,7 @@ fun HomeScreen(
                                         track = track,
                                         isCurrent = isCurrent,
                                         isPlaying = isCurrent && state.playback.isPlaying,
-                                        onClick = { actions.playTrack(track, home.quickPicks) },
+                                        onClick = { actions.playTrack(track, quickAccessTracks) },
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
@@ -325,8 +402,8 @@ fun HomeScreen(
                 }
             }
 
-            // Trending in the Philippines (Circular 112.dp artist portraits)
-            if ((showMusic || showOpm) && home.phArtists.isNotEmpty()) {
+            // Trending in the Philippines (112.dp circular artist portraits with hairline border)
+            if (showPhArtists && home.phArtists.isNotEmpty()) {
                 item(key = "ph_artists") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -349,12 +426,12 @@ fun HomeScreen(
                 }
             }
 
-            // Top 50 — Philippines
-            if ((showMusic || showOpm) && phTopTracks.isNotEmpty()) {
+            // Top Hits — Philippines
+            if (showPhTop && phTopTracks.isNotEmpty()) {
                 item(key = "ph_top_tracks") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
-                            title = "Top 50 — Philippines",
+                            title = "Top Hits — Philippines",
                             actionLabel = "Play All",
                             onActionClick = { actions.playTrack(phTopTracks.first(), phTopTracks) },
                             modifier = Modifier.padding(horizontal = 16.dp)
@@ -378,12 +455,12 @@ fun HomeScreen(
                 }
             }
 
-            // OPM Hits
+            // OPM Essentials
             if (showOpm && home.opmTracks.isNotEmpty()) {
-                item(key = "opm_hits") {
+                item(key = "opm_essentials") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
-                            title = "OPM Hits",
+                            title = "OPM Essentials",
                             actionLabel = "Play All",
                             onActionClick = { actions.playTrack(home.opmTracks.first(), home.opmTracks) },
                             modifier = Modifier.padding(horizontal = 16.dp)
@@ -407,12 +484,12 @@ fun HomeScreen(
                 }
             }
 
-            // Global Top 50
-            if (showMusic && home.globalTopTracks.isNotEmpty()) {
+            // Global Hits
+            if (showGlobal && home.globalTopTracks.isNotEmpty()) {
                 item(key = "global_top_tracks") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
-                            title = "Global Top 50",
+                            title = "Global Hits",
                             actionLabel = "Play All",
                             onActionClick = {
                                 actions.playTrack(home.globalTopTracks.first(), home.globalTopTracks)
@@ -439,7 +516,7 @@ fun HomeScreen(
             }
 
             // Global Trending Artists
-            if (showMusic && home.globalArtists.isNotEmpty()) {
+            if (showGlobal && home.globalArtists.isNotEmpty()) {
                 item(key = "global_artists") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -463,7 +540,7 @@ fun HomeScreen(
             }
 
             // Made For You
-            if (showMusic && home.madeForYou.isNotEmpty()) {
+            if (showMadeForYou && home.madeForYou.isNotEmpty()) {
                 item(key = "made_for_you") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -487,7 +564,7 @@ fun HomeScreen(
             }
 
             // Browse by Genre
-            if (showMusic || showOpm) {
+            if (showGenresAndCharts) {
                 item(key = "browse_by_genre") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -549,7 +626,7 @@ fun HomeScreen(
             }
 
             // Featured Charts & Playlists
-            if ((showMusic || showOpm) && home.trendingPlaylists.isNotEmpty()) {
+            if (showGenresAndCharts && home.trendingPlaylists.isNotEmpty()) {
                 item(key = "featured_playlists") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -574,10 +651,11 @@ fun HomeScreen(
 
             // Live PH Radio
             if (showRadio && home.liveRadio.isNotEmpty()) {
-                if (activeFilter.equals("Radio", ignoreCase = true)) {
+                if (isRadio) {
                     item(key = "live_radio_header") {
                         SonoraSectionHeader(
                             title = "Live PH Radio",
+                            subtitle = "${home.liveRadio.size} live stations",
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                     }
@@ -622,12 +700,13 @@ fun HomeScreen(
                 }
             }
 
-            // Podcasts in PH
+            // PH Podcasts
             if (showPodcasts && home.podcasts.isNotEmpty()) {
-                if (activeFilter.equals("Podcasts", ignoreCase = true)) {
+                if (isPodcasts) {
                     item(key = "podcasts_list_header") {
                         SonoraSectionHeader(
-                            title = "Podcasts in PH",
+                            title = "PH Podcasts",
+                            subtitle = "${home.podcasts.size} shows",
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                     }
@@ -641,7 +720,7 @@ fun HomeScreen(
                     item(key = "podcasts_shelf") {
                         Column(modifier = Modifier.fillMaxWidth()) {
                             SonoraSectionHeader(
-                                title = "Podcasts in PH",
+                                title = "PH Podcasts",
                                 modifier = Modifier.padding(horizontal = 16.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
@@ -686,7 +765,7 @@ fun HomeScreen(
             }
 
             // Recently Played
-            if (showMusic && home.recentlyPlayed.isNotEmpty()) {
+            if (showRecent && home.recentlyPlayed.isNotEmpty()) {
                 item(key = "recently_played") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SonoraSectionHeader(
@@ -717,6 +796,200 @@ fun HomeScreen(
 }
 
 @Composable
+private fun HeaderIconCircleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = HeaderButtonBg,
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = Modifier
+            .size(36.dp)
+            .sonoraPressable(shape = CircleShape, onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = TextPrimary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RefreshHeaderButton(
+    isRefreshing: Boolean,
+    onClick: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "refresh_angle"
+    )
+    Surface(
+        shape = CircleShape,
+        color = HeaderButtonBg,
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = Modifier
+            .size(36.dp)
+            .sonoraPressable(shape = CircleShape, onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = "Refresh Home",
+                tint = TextPrimary,
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer {
+                        rotationZ = if (isRefreshing) spinAngle else 0f
+                    }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditorialSpotlightHeroCard(
+    track: Track,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    onCardClick: () -> Unit,
+    onPlayToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val metaLine = remember(track.id, track.artist, track.durationSec) {
+        if (track.durationSec > 0) {
+            "${track.displayArtist} • ${track.formattedDuration}"
+        } else {
+            track.displayArtist
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = QuickAccessTileBg,
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(176.dp)
+            .sonoraPressable(shape = RoundedCornerShape(14.dp), pressedScale = 0.985f, onClick = onCardClick)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            SonoraArtwork(
+                artworkUrl = track.artworkUrl,
+                title = track.title,
+                cornerRadius = 14.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Smooth left-to-right & bottom-to-top dark gradient scrim
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                Color(0xE6121212),
+                                Color(0xAE121212),
+                                Color(0x66121212)
+                            )
+                        )
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x28121212),
+                                Color(0x66121212),
+                                Color(0xE6121212)
+                            )
+                        )
+                    )
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 14.dp)
+                ) {
+                    Text(
+                        text = "FEATURED FULL TRACK",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.1.sp
+                        ),
+                        color = EmeraldAccent,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = track.title.ifBlank { "Featured Track" },
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontSize = 20.sp,
+                            lineHeight = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.3).sp
+                        ),
+                        color = TextPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = metaLine,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = Color(0xFFD2D2D6),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Surface(
+                    shape = CircleShape,
+                    color = EmeraldAccent,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .sonoraPressable(shape = CircleShape, pressedScale = 0.92f, onClick = onPlayToggle)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (isCurrent && isPlaying) "Pause" else "Play",
+                            tint = Color.Black,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuickAccessTile(
     track: Track,
     isCurrent: Boolean,
@@ -726,9 +999,9 @@ private fun QuickAccessTile(
 ) {
     Surface(
         shape = RoundedCornerShape(6.dp),
-        color = ObsidianCard,
+        color = QuickAccessTileBg,
         modifier = modifier
-            .height(52.dp)
+            .height(56.dp)
             .sonoraPressable(shape = RoundedCornerShape(6.dp), onClick = onClick)
     ) {
         Row(
@@ -739,9 +1012,9 @@ private fun QuickAccessTile(
                 artworkUrl = track.artworkUrl,
                 title = track.title,
                 cornerRadius = 0.dp,
-                modifier = Modifier.size(52.dp)
+                modifier = Modifier.size(56.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Text(
                 text = track.title,
                 style = MaterialTheme.typography.labelLarge.copy(
@@ -760,7 +1033,7 @@ private fun QuickAccessTile(
                 AnimatedPlayingBars(
                     isPlaying = isPlaying,
                     color = EmeraldAccent,
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier.padding(end = 10.dp)
                 )
             }
         }
@@ -775,14 +1048,16 @@ private fun HomeArtistCircle(
     Column(
         modifier = Modifier
             .width(112.dp)
-            .sonoraPressable(shape = RoundedCornerShape(8.dp), onClick = onClick),
+            .sonoraPressable(shape = RoundedCornerShape(12.dp), onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         SonoraArtwork(
             artworkUrl = artist.avatarUrl,
             title = artist.name,
             isCircle = true,
-            modifier = Modifier.size(112.dp)
+            modifier = Modifier
+                .size(112.dp)
+                .border(1.dp, HeaderButtonBorder, CircleShape)
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(

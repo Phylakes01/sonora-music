@@ -2,6 +2,7 @@ package com.sonora.music.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -310,7 +311,8 @@ fun DetailScreenHost(
     confirmDeletePlaylist?.let { target ->
         AlertDialog(
             onDismissRequest = { confirmDeletePlaylist = null },
-            containerColor = ObsidianSurface,
+            shape = RoundedCornerShape(14.dp),
+            containerColor = Color(0xFF1A1A1D),
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
             title = { Text("Delete \"${target.name}\"?") },
@@ -337,7 +339,8 @@ fun DetailScreenHost(
     if (confirmClearDownloads) {
         AlertDialog(
             onDismissRequest = { confirmClearDownloads = false },
-            containerColor = ObsidianSurface,
+            shape = RoundedCornerShape(14.dp),
+            containerColor = Color(0xFF1A1A1D),
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
             title = { Text("Remove all downloads?") },
@@ -414,7 +417,7 @@ private fun DetailPrimaryPlayButton(
         shape = CircleShape,
         color = if (enabled) EmeraldAccent else ObsidianCard,
         modifier = Modifier
-            .size(52.dp)
+            .size(54.dp)
             .sonoraPressable(enabled = enabled, shape = CircleShape, onClick = onClick)
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -447,11 +450,11 @@ private fun PlaylistDetailView(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp)
+                .height(280.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            washColor.copy(alpha = 0.22f),
+                            washColor.copy(alpha = 0.24f),
                             ObsidianBg
                         )
                     )
@@ -515,10 +518,12 @@ private fun PlaylistDetailView(
                         SonoraArtwork(
                             artworkUrl = playlist.artworkUrl ?: tracks.firstOrNull()?.artworkUrl,
                             title = playlist.name,
-                            cornerRadius = 8.dp,
+                            cornerRadius = 12.dp,
                             colorStart = playlist.coverColorStart,
                             colorEnd = playlist.coverColorEnd,
-                            modifier = Modifier.size(180.dp)
+                            modifier = Modifier
+                                .size(180.dp)
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
                         )
                     }
                     Spacer(modifier = Modifier.height(16.dp))
@@ -715,7 +720,7 @@ private fun ArtistDetailView(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(240.dp)
+                .height(260.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
@@ -751,7 +756,9 @@ private fun ArtistDetailView(
                             artworkUrl = artist.avatarUrl,
                             title = artist.name,
                             isCircle = true,
-                            modifier = Modifier.size(144.dp)
+                            modifier = Modifier
+                                .size(148.dp)
+                                .border(1.dp, Color(0xFF2B2B30), CircleShape)
                         )
                     }
                     Spacer(modifier = Modifier.height(14.dp))
@@ -890,7 +897,7 @@ private fun MediaCollectionDetailView(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(250.dp)
+                .height(270.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
@@ -925,8 +932,10 @@ private fun MediaCollectionDetailView(
                         SonoraArtwork(
                             artworkUrl = artworkUrl,
                             title = title,
-                            cornerRadius = 8.dp,
-                            modifier = Modifier.size(168.dp)
+                            cornerRadius = 12.dp,
+                            modifier = Modifier
+                                .size(168.dp)
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
                         )
                     }
                     Spacer(modifier = Modifier.height(16.dp))
@@ -1082,8 +1091,9 @@ private fun SpecialCollectionDetailView(
                         Box(
                             modifier = Modifier
                                 .size(136.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(coverBrush),
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(coverBrush)
+                                .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1234,8 +1244,9 @@ private fun JamQueueDetailView(
                         Box(
                             modifier = Modifier
                                 .size(64.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(ObsidianCard),
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF202024))
+                                .border(1.dp, ObsidianStroke, RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1391,8 +1402,8 @@ private fun DetailEmptyCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = ObsidianSurface,
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF1A1A1D),
         border = BorderStroke(1.dp, ObsidianStroke),
         modifier = modifier.fillMaxWidth()
     ) {

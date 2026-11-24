@@ -93,7 +93,7 @@ fun AiPlaylistSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = ObsidianSurface,
+        containerColor = Color(0xFF161618),
         contentColor = TextPrimary,
         dragHandle = {
             Box(
@@ -147,7 +147,7 @@ fun AiPlaylistSheet(
                 onValueChange = { prompt = it },
                 placeholder = { Text("e.g. Chill OPM for an evening drive") },
                 maxLines = 3,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = TextPrimary,
                     unfocusedBorderColor = ObsidianStroke,
@@ -230,8 +230,8 @@ fun AiPlaylistSheet(
                 searchState.generatedAiPlaylist?.let { playlist ->
                     Spacer(modifier = Modifier.height(18.dp))
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = ObsidianCard,
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF1F1F23),
                         border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -240,7 +240,7 @@ fun AiPlaylistSheet(
                                 SonoraArtwork(
                                     artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
                                     title = playlist.name,
-                                    cornerRadius = 6.dp,
+                                    cornerRadius = 8.dp,
                                     colorStart = playlist.coverColorStart,
                                     colorEnd = playlist.coverColorEnd,
                                     modifier = Modifier.size(56.dp)
@@ -291,8 +291,8 @@ fun AiPlaylistSheet(
                                             SonoraArtwork(
                                                 artworkUrl = track.artworkUrl,
                                                 title = track.title,
-                                                cornerRadius = 4.dp,
-                                                modifier = Modifier.size(38.dp)
+                                                cornerRadius = 6.dp,
+                                                modifier = Modifier.size(40.dp)
                                             )
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Column(modifier = Modifier.weight(1f)) {

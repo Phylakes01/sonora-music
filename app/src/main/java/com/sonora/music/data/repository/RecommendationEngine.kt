@@ -92,7 +92,10 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
             .take(20)
 
         val likedMusic = likedSongs.filter {
-            it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES
+            it.source == TrackSource.AUDIUS &&
+                !it.isPreviewOnly &&
+                it.durationSec >= 90 &&
+                it.streamUrl.startsWith("http", ignoreCase = true)
         }.take(8)
         val dailyTracks = (likedMusic + artistTracks + topGenreTracks + opmTrending + phTop + globalTop)
             .distinctBy { it.id }

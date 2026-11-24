@@ -2,8 +2,8 @@ package com.sonora.music.model
 
 enum class TrackSource(val badgeLabel: String) {
     AUDIUS("STREAM"),
-    DEEZER("PREVIEW"),
-    ITUNES("PREVIEW"),
+    DEEZER("CATALOG"),
+    ITUNES("CATALOG"),
     PODCAST("PODCAST"),
     AUDIOBOOK("AUDIOBOOK"),
     RADIO("LIVE"),

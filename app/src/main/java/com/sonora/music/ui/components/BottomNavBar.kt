@@ -35,13 +35,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sonora.music.model.AppTab
 import com.sonora.music.ui.theme.ObsidianBg
-import com.sonora.music.ui.theme.ObsidianCard
 
 private val NavInactiveColor = Color(0xFF8E8E8E)
+private val NavHairlineColor = Color(0xFF262626)
 
 /**
- * Docked solid opaque navigation bar with a subtle 1.dp hairline top divider
- * and clean Home, Search, and Library destinations.
+ * Docked solid opaque navigation bar (#121212) with a subtle 1.dp #262626 hairline
+ * top divider and clean Home, Search, and Library destinations.
  */
 @Composable
 fun BottomNavBar(
@@ -62,7 +62,7 @@ fun BottomNavBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(ObsidianCard)
+                .background(NavHairlineColor)
         )
 
         Row(

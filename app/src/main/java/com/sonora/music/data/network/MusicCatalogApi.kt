@@ -14,14 +14,19 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import org.json.JSONArray
 import org.json.JSONObject
+import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Unified Philippines (PH) & Global music catalog backed by Deezer public API,
- * Apple Music PH Chart RSS, and iTunes PH Search.
+ * Unified Philippines (PH) & Global full-length music catalog.
+ * Every returned song is a full-length Audius stream (`source = TrackSource.AUDIUS`,
+ * `durationSec >= 90`, `isPreviewOnly = false`). Deezer and Apple/iTunes metadata
+ * are used strictly for chart discovery and cover artwork — 30-second audio preview
+ * URLs are never stored or returned.
  */
 class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.client) {
 
@@ -32,84 +37,57 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     private val trackListCache = ConcurrentHashMap<String, CacheEntry<List<Track>>>()
     private val artistListCache = ConcurrentHashMap<String, CacheEntry<List<Artist>>>()
     private val playlistListCache = ConcurrentHashMap<String, CacheEntry<List<Playlist>>>()
+    private val seedArtworkCache = ConcurrentHashMap<String, HydratedMeta>()
+    private val trackMetaByKeyCache = ConcurrentHashMap<String, HydratedMeta>()
 
     suspend fun getPhTopTracks(limit: Int = 40): List<Track> = withContext(Dispatchers.IO) {
         val safeLimit = limit.coerceIn(1, 100)
         cachedTracks("ph_top_$safeLimit") {
             coroutineScope {
                 val primaryDef = async {
-                    fetchDeezerTracks(
+                    fetchDeezerChartCandidates(
                         "/playlist/$PL_TOP_HITS_PH_2026/tracks?limit=$safeLimit",
                         defaultGenre = "OPM"
                     )
                 }
                 val viralDef = async {
-                    fetchDeezerTracks(
-                        "/playlist/$PL_OPM_VIRAL_HITS/tracks?limit=20",
+                    fetchDeezerChartCandidates(
+                        "/playlist/$PL_OPM_VIRAL_HITS/tracks?limit=25",
                         defaultGenre = "OPM"
                     )
-                }
-                val tjDef = async {
-                    fetchDeezerTracks("/artist/$ARTIST_TJ_MONTERDE/top?limit=3", defaultGenre = "OPM")
-                }
-                val sunkissedDef = async {
-                    fetchDeezerTracks("/artist/$ARTIST_SUNKISSED_LOLA/top?limit=3", defaultGenre = "OPM")
                 }
                 val appleRssDef = async { fetchApplePhChartEntries() }
+                val audiusBatchDef = async { fetchAudiusSeedMetadata(PH_SEED_TRACKS) }
 
-                val primaryTracks = primaryDef.await()
-                val viralTracks = viralDef.await()
-                val tjTracks = tjDef.await()
-                val sunkissedTracks = sunkissedDef.await()
+                val primaryCandidates = primaryDef.await()
+                val viralCandidates = viralDef.await()
                 val appleEntries = appleRssDef.await()
+                val audiusBatchMeta = audiusBatchDef.await()
 
-                val anchorTracks = extractFeaturedPhHits(
-                    primaryTracks + viralTracks + tjTracks + sunkissedTracks
-                )
-                val spotlightAndViral = anchorTracks + viralTracks + tjTracks + sunkissedTracks
+                val hydratedSeeds = hydrateSeeds(PH_SEED_TRACKS, audiusBatchMeta)
 
-                val combined = mutableListOf<Track>()
-                combined.addAll(
-                    deduplicateTracks(interleaveTrackLists(primaryTracks, spotlightAndViral))
-                )
+                val combinedChartCandidates = deduplicateTracks(primaryCandidates + viralCandidates)
+                val nonSeedCandidates = combinedChartCandidates
+                    .filter { matchCuratedSeed(it.title, it.artist) == null }
+                    .take(8)
 
-                if (combined.size < safeLimit && appleEntries.isNotEmpty()) {
-                    val seenKeys = combined.mapTo(HashSet()) { normalizedTrackKey(it.title, it.artist) }
-                    val missingEntries = appleEntries.filter { entry ->
-                        normalizedTrackKey(entry.title, entry.artist) !in seenKeys
-                    }
-                    val toEnrichCount = if (combined.isEmpty()) {
-                        safeLimit.coerceAtMost(15)
-                    } else {
-                        (safeLimit - combined.size).coerceAtMost(6)
-                    }
-                    val enriched = missingEntries
-                        .take(toEnrichCount)
-                        .chunked(3)
-                        .flatMap { chunk ->
-                            chunk.map { entry ->
-                                async {
-                                    searchItunesTracks("${entry.title} ${entry.artist}", limit = 1, defaultGenre = "OPM")
-                                        .firstOrNull()
-                                }
-                            }.awaitAll().filterNotNull()
-                        }
-                    combined.addAll(enriched)
+                val resolvedExtrasDef = async {
+                    resolveCandidatesToFull(nonSeedCandidates, maxResolve = 8)
+                }
+                val appleExtrasDef = async {
+                    val existingKeys = (hydratedSeeds + nonSeedCandidates)
+                        .mapTo(HashSet()) { normalizedTrackKey(it.title, it.artist) }
+                    val missingApple = appleEntries
+                        .filter { normalizedTrackKey(it.title, it.artist) !in existingKeys }
+                        .take(4)
+                    resolveAppleEntriesToFull(missingApple, defaultGenre = "OPM")
                 }
 
-                if (combined.size < 10) {
-                    val dzPhChart = fetchDeezerTracks(
-                        "/playlist/$PL_DEEZER_TOP_PH/tracks?limit=$safeLimit",
-                        defaultGenre = "OPM"
-                    )
-                    combined.addAll(dzPhChart)
-                }
+                val resolvedExtras = resolvedExtrasDef.await()
+                val appleExtras = appleExtrasDef.await()
 
-                if (combined.isEmpty()) {
-                    combined.addAll(searchItunesTracks("OPM hits Philippines", limit = safeLimit.coerceAtMost(25), defaultGenre = "OPM"))
-                }
-
-                deduplicateTracks(combined).take(safeLimit)
+                val combined = interleaveTrackLists(hydratedSeeds, resolvedExtras + appleExtras)
+                finalizeFullTrackList(combined, safeLimit)
             }
         }
     }
@@ -119,37 +97,37 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         cachedTracks("opm_trending_$safeLimit") {
             coroutineScope {
                 val playlistDef = async {
-                    fetchDeezerTracks(
+                    fetchDeezerChartCandidates(
                         "/playlist/$PL_OPM_VIRAL_HITS/tracks?limit=$safeLimit",
                         defaultGenre = "OPM"
                     )
                 }
                 val artistTrackDefs = OPM_SPOTLIGHT_ARTIST_IDS.map { artistId ->
-                    val artistLimit = if (artistId == ARTIST_DIONELA) 10 else 5
                     async {
-                        fetchDeezerTracks(
-                            "/artist/$artistId/top?limit=$artistLimit",
+                        fetchDeezerChartCandidates(
+                            "/artist/$artistId/top?limit=4",
                             defaultGenre = "OPM"
                         )
                     }
                 }
+                val audiusBatchDef = async { fetchAudiusSeedMetadata(PH_SEED_TRACKS) }
 
-                val playlistTracks = playlistDef.await()
+                val playlistCandidates = playlistDef.await()
                 val spotlightLists = artistTrackDefs.awaitAll()
-                val roundRobinSpotlight = roundRobinInterleave(spotlightLists)
-                val anchorTracks = extractFeaturedPhHits(roundRobinSpotlight + playlistTracks)
+                val audiusBatchMeta = audiusBatchDef.await()
 
-                val merged = interleaveTrackLists(
-                    anchorTracks + roundRobinSpotlight,
-                    playlistTracks
+                val hydratedSeeds = hydrateSeeds(PH_SEED_TRACKS, audiusBatchMeta)
+
+                val chartPool = deduplicateTracks(
+                    roundRobinInterleave(spotlightLists) + playlistCandidates
                 )
-                val finalTracks = if (merged.isNotEmpty()) {
-                    merged
-                } else {
-                    searchItunesTracks("Cup of Joe BINI Dionela Maki", limit = safeLimit.coerceAtMost(25), defaultGenre = "OPM")
-                }
+                val nonSeedCandidates = chartPool
+                    .filter { matchCuratedSeed(it.title, it.artist) == null }
+                    .take(10)
+                val resolvedExtras = resolveCandidatesToFull(nonSeedCandidates, maxResolve = 10)
 
-                deduplicateTracks(finalTracks).take(safeLimit)
+                val combined = hydratedSeeds + resolvedExtras
+                finalizeFullTrackList(combined, safeLimit)
             }
         }
     }
@@ -159,29 +137,32 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         cachedTracks("global_top_$safeLimit") {
             coroutineScope {
                 val worldwideDef = async {
-                    fetchDeezerTracks(
+                    fetchDeezerChartCandidates(
                         "/playlist/$PL_GLOBAL_TOP_50/tracks?limit=$safeLimit",
                         defaultGenre = "Pop"
                     )
                 }
                 val chartDef = async {
-                    fetchDeezerTracks(
+                    fetchDeezerChartCandidates(
                         "/chart/0/tracks?limit=$safeLimit",
                         defaultGenre = "Pop"
                     )
                 }
+                val audiusBatchDef = async { fetchAudiusSeedMetadata(GLOBAL_SEED_TRACKS) }
 
                 val worldwide = worldwideDef.await()
                 val chart = chartDef.await()
-                val merged = interleaveTrackLists(worldwide, chart)
+                val audiusBatchMeta = audiusBatchDef.await()
 
-                val finalTracks = if (merged.isNotEmpty()) {
-                    merged
-                } else {
-                    searchItunesTracks("Taylor Swift Bruno Mars Ariana Grande", limit = safeLimit.coerceAtMost(25), defaultGenre = "Pop")
-                }
+                val hydratedSeeds = hydrateSeeds(GLOBAL_SEED_TRACKS, audiusBatchMeta)
+                val mergedChart = deduplicateTracks(interleaveTrackLists(worldwide, chart))
+                val nonSeedCandidates = mergedChart
+                    .filter { matchCuratedSeed(it.title, it.artist) == null }
+                    .take(10)
+                val resolvedExtras = resolveCandidatesToFull(nonSeedCandidates, maxResolve = 10)
 
-                deduplicateTracks(finalTracks).take(safeLimit)
+                val combined = hydratedSeeds + resolvedExtras
+                finalizeFullTrackList(combined, safeLimit)
             }
         }
     }
@@ -209,59 +190,170 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         cachedTracks("genre_${key}_$safeLimit") {
             when {
                 key == "opm" -> getOpmTrendingTracks(safeLimit)
-                key == "p-pop" || key == "ppop" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("320392011", "52961842", "122878032"), "P-Pop", perArtist = 8) +
-                        searchTracks("BINI SB19 P-Pop", limit = 15)
-                    deduplicateTracks(tracks).map { it.copy(genre = "P-Pop") }.take(safeLimit)
+
+                key == "p-pop" || key == "ppop" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter { it.genre.equals("P-Pop", ignoreCase = true) }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("320392011", "52961842", "122878032"), "P-Pop", perArtist = 6)
+                    }
+                    val biniDef = async { searchArtistMatchedAudius("BINI", "P-Pop", limit = 10) }
+                    val sb19Def = async { searchArtistMatchedAudius("SB19", "P-Pop", limit = 10) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val raw = (seeds + resolvedChart + biniDef.await() + sb19Def.await())
+                        .map { it.copy(genre = "P-Pop") }
+                    finalizeFullTrackList(raw, safeLimit)
                 }
-                key == "pinoy hip-hop" || key == "pinoy rap" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("126789982", "11321714"), "Pinoy Hip-Hop", perArtist = 10) +
-                        searchTracks("Hev Abi Skusta Clee Al James Shanti Dope", limit = 15)
-                    deduplicateTracks(tracks).map { it.copy(genre = "Pinoy Hip-Hop") }.take(safeLimit)
+
+                key == "pinoy hip-hop" || key == "pinoy rap" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter { it.genre.equals("Pinoy Hip-Hop", ignoreCase = true) }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("126789982", "11321714"), "Pinoy Hip-Hop", perArtist = 8)
+                    }
+                    val hevDef = async { searchArtistMatchedAudius("Hev Abi", "Pinoy Hip-Hop", limit = 10) }
+                    val alDef = async { searchArtistMatchedAudius("Al James", "Pinoy Hip-Hop", limit = 8) }
+                    val shantiDef = async { searchArtistMatchedAudius("Shanti Dope", "Pinoy Hip-Hop", limit = 8) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val raw = (seeds + resolvedChart + hevDef.await() + alDef.await() + shantiDef.await())
+                        .map { it.copy(genre = "Pinoy Hip-Hop") }
+                    finalizeFullTrackList(raw, safeLimit)
                 }
-                key == "throwback opm" -> {
-                    val tracks = fetchDeezerTracks("/playlist/$PL_THROWBACK_OPM_2000S/tracks?limit=$safeLimit", defaultGenre = "Throwback OPM")
-                        .ifEmpty { searchTracks("Eraserheads Rivermaya Parokya ni Edgar", limit = safeLimit) }
-                    deduplicateTracks(tracks).map { it.copy(genre = "Throwback OPM") }.take(safeLimit)
+
+                key == "throwback opm" -> coroutineScope {
+                    val chartDef = async {
+                        fetchDeezerChartCandidates("/playlist/$PL_THROWBACK_OPM_2000S/tracks?limit=$safeLimit", "Throwback OPM")
+                    }
+                    val eheadsDef = async { searchArtistMatchedAudius("Eraserheads", "Throwback OPM", limit = 8) }
+                    val parokyaDef = async { searchArtistMatchedAudius("Parokya ni Edgar", "Throwback OPM", limit = 8) }
+                    val rivermayaDef = async { searchArtistMatchedAudius("Rivermaya", "Throwback OPM", limit = 8) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 12)
+                    val combined = (resolvedChart + eheadsDef.await() + parokyaDef.await() + rivermayaDef.await())
+                        .ifEmpty { hydrateSeeds(PH_SEED_TRACKS) }
+                        .map { it.copy(genre = "Throwback OPM") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "pop" || key == "global pop" || key == "dance" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("12246", "1562681", "1176900", "11152580"), "Pop", perArtist = 6) +
-                        getGlobalTopTracks(safeLimit)
-                    deduplicateTracks(tracks).map { it.copy(genre = "Pop") }.take(safeLimit)
+
+                key == "pop" || key == "global pop" || key == "dance" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter { it.genre.equals("Pop", ignoreCase = true) }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("12246", "1562681", "1176900", "11152580"), "Pop", perArtist = 5)
+                    }
+                    val audiusDef = async { getAudiusTrendingFullTracks(genre = "Pop", limit = 15) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + audiusDef.await())
+                        .map { it.copy(genre = "Pop") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "r&b" || key == "r&b/soul" || key == "soul" || key == "jazz" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("69165172", "55640202", "4050205"), "R&B", perArtist = 8) +
-                        searchTracks("Dionela Arthur Nery SZA R&B", limit = 12)
-                    deduplicateTracks(tracks).map { it.copy(genre = "R&B") }.take(safeLimit)
+
+                key == "r&b" || key == "r&b/soul" || key == "soul" || key == "jazz" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter {
+                            it.genre.equals("R&B", ignoreCase = true) ||
+                                it.artistId in setOf("69165172", "55640202", "4050205", "1193881")
+                        }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("69165172", "55640202", "4050205"), "R&B", perArtist = 6)
+                    }
+                    val audiusDef = async { getAudiusTrendingFullTracks(genre = "R&B/Soul", limit = 15) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + audiusDef.await())
+                        .map { it.copy(genre = "R&B") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "hip-hop" || key == "hip-hop/rap" || key == "rap" || key == "trap" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("525046", "126789982"), "Hip-Hop", perArtist = 10) +
-                        searchTracks("Kendrick Lamar Drake Travis Scott", limit = 15)
-                    deduplicateTracks(tracks).map { it.copy(genre = "Hip-Hop") }.take(safeLimit)
+
+                key == "hip-hop" || key == "hip-hop/rap" || key == "rap" || key == "trap" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter {
+                            it.genre.equals("Hip-Hop", ignoreCase = true) ||
+                                it.genre.equals("Pinoy Hip-Hop", ignoreCase = true)
+                        }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("525046", "126789982"), "Hip-Hop", perArtist = 6)
+                    }
+                    val audiusDef = async { getAudiusTrendingFullTracks(genre = "Hip-Hop/Rap", limit = 15) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + audiusDef.await())
+                        .map { it.copy(genre = "Hip-Hop") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "k-pop" || key == "kpop" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("1228100"), "K-Pop", perArtist = 10) +
-                        searchTracks("BLACKPINK NewJeans aespa Jungkook", limit = 20)
-                    deduplicateTracks(tracks).map { it.copy(genre = "K-Pop") }.take(safeLimit)
+
+                key == "k-pop" || key == "kpop" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter { it.genre.equals("K-Pop", ignoreCase = true) }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("1228100"), "K-Pop", perArtist = 8)
+                    }
+                    val jennieDef = async { searchArtistMatchedAudius("JENNIE", "K-Pop", limit = 8) }
+                    val bpDef = async { searchArtistMatchedAudius("BLACKPINK", "K-Pop", limit = 8) }
+                    val njDef = async { searchArtistMatchedAudius("NewJeans", "K-Pop", limit = 8) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + jennieDef.await() + bpDef.await() + njDef.await())
+                        .map { it.copy(genre = "K-Pop") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "rock" || key == "indie" || key == "alternative" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("11152604", "12450156", "1407775"), "Rock", perArtist = 8) +
-                        searchTracks("IV Of Spades Lola Amour Eraserheads", limit = 15)
-                    deduplicateTracks(tracks).map { it.copy(genre = "Rock") }.take(safeLimit)
+
+                key == "rock" || key == "indie" || key == "alternative" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter { it.genre.equals("Rock", ignoreCase = true) }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("11152604", "12450156", "1407775"), "Rock", perArtist = 6)
+                    }
+                    val audiusDef = async { getAudiusTrendingFullTracks(genre = "Rock", limit = 15) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + audiusDef.await())
+                        .map { it.copy(genre = "Rock") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "chill" || key == "lo-fi" || key == "lofi" || key == "ambient" || key == "acoustic" || key == "folk" -> {
-                    val tracks = fetchMultiArtistTopTracks(listOf("11072592", "242188", "11819305", "6248262"), "Chill", perArtist = 6) +
-                        searchTracks("chill acoustic OPM lo-fi", limit = 12)
-                    deduplicateTracks(tracks).map { it.copy(genre = "Chill") }.take(safeLimit)
+
+                key == "chill" || key == "lo-fi" || key == "lofi" || key == "ambient" || key == "acoustic" || key == "folk" -> coroutineScope {
+                    val seeds = hydrateSeeds(
+                        ALL_SEED_TRACKS.filter {
+                            it.genre.equals("Chill", ignoreCase = true) ||
+                                it.artistId in setOf("242188", "7189292", "6248262", "179158087")
+                        }
+                    )
+                    val chartDef = async {
+                        fetchMultiArtistChartCandidates(listOf("11072592", "242188", "11819305", "6248262"), "Chill", perArtist = 5)
+                    }
+                    val audiusDef = async { getAudiusTrendingFullTracks(genre = "Lo-Fi", limit = 15) }
+
+                    val resolvedChart = resolveCandidatesToFull(chartDef.await(), maxResolve = 8)
+                    val combined = (seeds + resolvedChart + audiusDef.await())
+                        .map { it.copy(genre = "Chill") }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                key == "electronic" || key == "house" || key == "techno" || key == "synthwave" -> {
-                    searchTracks("Calvin Harris Fred again electronic dance", limit = safeLimit)
-                        .ifEmpty { getGlobalTopTracks(safeLimit) }
+
+                key == "electronic" || key == "house" || key == "techno" || key == "synthwave" -> coroutineScope {
+                    val audiusTrendDef = async { getAudiusTrendingFullTracks(genre = "Electronic", limit = safeLimit) }
+                    val audiusSearchDef = async { searchAudiusFullTracks(cleanGenre, limit = safeLimit, defaultGenre = cleanGenre) }
+                    val combined = (audiusTrendDef.await() + audiusSearchDef.await())
                         .map { it.copy(genre = cleanGenre) }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
-                else -> {
-                    searchTracks(cleanGenre, limit = safeLimit)
+
+                else -> coroutineScope {
+                    val searchDef = async { searchTracks(cleanGenre, limit = safeLimit) }
+                    val trendDef = async { getAudiusTrendingFullTracks(genre = cleanGenre, limit = safeLimit) }
+                    val combined = (searchDef.await() + trendDef.await())
                         .ifEmpty { getPhTopTracks(safeLimit) }
+                    finalizeFullTrackList(combined, safeLimit)
                 }
             }
         }
@@ -275,8 +367,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                         async {
                             val root = fetchDeezerJson("/playlist/${seed.rawId}?limit=1")
                             if (root != null) {
-                                val parsed = parseDeezerPlaylist(root, fallback = seed)
-                                parsed ?: seed.toPlaylist()
+                                parseDeezerPlaylist(root, fallback = seed) ?: seed.toPlaylist()
                             } else {
                                 seed.toPlaylist()
                             }
@@ -288,14 +379,63 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     suspend fun getPlaylistTracks(playlistId: String): List<Track> = withContext(Dispatchers.IO) {
-        val cleanId = playlistId.trim().removePrefix(PLAYLIST_ID_PREFIX)
+        val rawTrimmed = playlistId.trim()
+        if (rawTrimmed.isEmpty()) return@withContext emptyList()
+
+        if (rawTrimmed.startsWith(AUDIUS_PLAYLIST_ID_PREFIX)) {
+            val audPlaylistId = rawTrimmed.removePrefix(AUDIUS_PLAYLIST_ID_PREFIX)
+            return@withContext cachedTracks("pl_aud_$audPlaylistId") {
+                val tracks = fetchAudiusPlaylistFullTracks(audPlaylistId)
+                finalizeFullTrackList(tracks, 50)
+            }
+        }
+
+        val cleanId = rawTrimmed.removePrefix(PLAYLIST_ID_PREFIX)
         if (cleanId.isEmpty()) return@withContext emptyList()
+
         cachedTracks("pl_tracks_$cleanId") {
-            val tracks = fetchDeezerTracks(
-                "/playlist/${encodePathSegment(cleanId)}/tracks?limit=50",
-                defaultGenre = playlistDefaultGenre(cleanId)
-            )
-            deduplicateTracks(tracks)
+            coroutineScope {
+                val seedRosterForPlaylist = when (cleanId) {
+                    PL_TOP_HITS_PH_2026, PL_OPM_VIRAL_HITS, PL_DEEZER_TOP_PH -> PH_SEED_TRACKS
+                    PL_GLOBAL_TOP_50 -> GLOBAL_SEED_TRACKS
+                    else -> emptyList()
+                }
+                val audiusSeedDef = async {
+                    if (seedRosterForPlaylist.isNotEmpty()) {
+                        fetchAudiusSeedMetadata(seedRosterForPlaylist)
+                    } else {
+                        emptyMap()
+                    }
+                }
+                val deezerCandidatesDef = async {
+                    fetchDeezerChartCandidates(
+                        "/playlist/${encodePathSegment(cleanId)}/tracks?limit=50",
+                        defaultGenre = playlistDefaultGenre(cleanId)
+                    )
+                }
+
+                val audiusBatchMeta = audiusSeedDef.await()
+                val chartCandidates = deezerCandidatesDef.await()
+                val hydratedSeeds = if (seedRosterForPlaylist.isNotEmpty()) {
+                    hydrateSeeds(seedRosterForPlaylist, audiusBatchMeta)
+                } else {
+                    emptyList()
+                }
+
+                val nonSeedCandidates = chartCandidates
+                    .filter { matchCuratedSeed(it.title, it.artist) == null }
+                    .take(15)
+                val resolvedChartTracks = resolveCandidatesToFull(nonSeedCandidates, maxResolve = 15)
+
+                val extraThrowback = if (cleanId == PL_THROWBACK_OPM_2000S && resolvedChartTracks.size < 10) {
+                    searchAudiusFullTracks("Eraserheads Rivermaya Parokya ni Edgar", limit = 20, defaultGenre = "Throwback OPM")
+                } else {
+                    emptyList()
+                }
+
+                val combined = interleaveTrackLists(hydratedSeeds, resolvedChartTracks + extraThrowback)
+                finalizeFullTrackList(combined, 50)
+            }
         }
     }
 
@@ -306,19 +446,60 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     ): List<Track> = withContext(Dispatchers.IO) {
         val safeLimit = limit.coerceIn(1, 50)
         val cleanId = normalizeDeezerArtistId(artistId)
-        val cleanName = artistName.trim()
+        val effectiveName = artistName.trim().ifBlank { CURATED_ARTIST_NAME_BY_ID[cleanId].orEmpty() }
+        val cacheKey = "art_top_${cleanId.ifEmpty { effectiveName.lowercase(Locale.ROOT) }}_$safeLimit"
 
-        if (cleanId.isNotEmpty() && cleanId.all { it.isDigit() }) {
-            val cached = cachedTracks("art_top_${cleanId}_$safeLimit") {
-                fetchDeezerTracks("/artist/$cleanId/top?limit=$safeLimit", defaultGenre = artistDefaultGenre(cleanId))
+        cachedTracks(cacheKey) {
+            coroutineScope {
+                val matchingSeeds = ALL_SEED_TRACKS.filter { seed ->
+                    (cleanId.isNotEmpty() && seed.artistId == cleanId) ||
+                        (effectiveName.isNotEmpty() && matchesArtistName(seed.artist, seed.title, effectiveName))
+                }
+
+                val audiusSeedDef = async {
+                    if (matchingSeeds.isNotEmpty()) fetchAudiusSeedMetadata(matchingSeeds) else emptyMap()
+                }
+                val deezerTopDef = async {
+                    if (cleanId.isNotEmpty() && cleanId.all { it.isDigit() }) {
+                        fetchDeezerChartCandidates(
+                            "/artist/$cleanId/top?limit=$safeLimit",
+                            defaultGenre = artistDefaultGenre(cleanId)
+                        )
+                    } else {
+                        emptyList()
+                    }
+                }
+                val audiusSearchDef = async {
+                    if (effectiveName.isNotEmpty()) {
+                        searchArtistMatchedAudius(
+                            artistName = effectiveName,
+                            defaultGenre = artistDefaultGenre(cleanId),
+                            limit = safeLimit
+                        )
+                    } else {
+                        emptyList()
+                    }
+                }
+
+                val audiusSeedMeta = audiusSeedDef.await()
+                val deezerCandidates = deezerTopDef.await()
+                val audiusArtistTracks = audiusSearchDef.await()
+
+                val hydratedSeeds = if (matchingSeeds.isNotEmpty()) {
+                    hydrateSeeds(matchingSeeds, audiusSeedMeta)
+                } else {
+                    emptyList()
+                }
+
+                val nonSeedCandidates = deezerCandidates
+                    .filter { matchCuratedSeed(it.title, it.artist) == null }
+                    .take(10)
+                val resolvedDeezer = resolveCandidatesToFull(nonSeedCandidates, maxResolve = 10)
+
+                val combined = hydratedSeeds + resolvedDeezer + audiusArtistTracks
+                finalizeFullTrackList(combined, safeLimit)
             }
-            if (cached.isNotEmpty()) return@withContext cached
         }
-
-        if (cleanName.isNotEmpty()) {
-            return@withContext searchTracks(cleanName, limit = safeLimit)
-        }
-        emptyList()
     }
 
     suspend fun getRelatedArtists(artistId: String): List<Artist> = withContext(Dispatchers.IO) {
@@ -349,15 +530,46 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         if (trimmed.isEmpty()) return@withContext emptyList()
         val safeLimit = limit.coerceIn(1, 50)
 
-        val deezerTracks = fetchDeezerTracks(
-            "/search/track?q=${encodeUrlParam(trimmed)}&order=RANKING&limit=$safeLimit",
-            defaultGenre = "Music"
-        )
-        if (deezerTracks.isNotEmpty()) {
-            return@withContext deduplicateTracks(deezerTracks).take(safeLimit)
-        }
+        coroutineScope {
+            val matchingSeeds = findMatchingCuratedSeeds(trimmed)
+            val seedMetaDef = async {
+                if (matchingSeeds.isNotEmpty()) fetchAudiusSeedMetadata(matchingSeeds) else emptyMap()
+            }
+            val audiusSearchDef = async {
+                searchAudiusFullTracks(trimmed, limit = safeLimit.coerceAtLeast(25), defaultGenre = "Music")
+            }
 
-        deduplicateTracks(searchItunesTracks(trimmed, limit = safeLimit, defaultGenre = "Music")).take(safeLimit)
+            val seedMeta = seedMetaDef.await()
+            val hydratedSeeds = if (matchingSeeds.isNotEmpty()) {
+                hydrateSeeds(matchingSeeds, seedMeta)
+            } else {
+                emptyList()
+            }
+            val audiusHits = audiusSearchDef.await()
+
+            val curatedIds = hydratedSeeds.mapTo(HashSet()) { it.id }
+            val curatedStreams = hydratedSeeds.mapTo(HashSet()) { it.streamUrl }
+            val queryNorm = normalizeText(trimmed)
+            val queryTokens = tokenizeWords(trimmed)
+            val queryWantsNoise = NOISE_SEARCH_REGEXES.any { it.containsMatchIn(queryNorm) }
+
+            val combined = deduplicateTracks(hydratedSeeds + audiusHits)
+                .filter { track ->
+                    queryWantsNoise || !isNoiseSearchResult(track.title)
+                }
+                .sortedWith(
+                    compareByDescending<Track> { track ->
+                        scoreSearchRelevance(
+                            track = track,
+                            queryNorm = queryNorm,
+                            queryTokens = queryTokens,
+                            isCuratedSeed = track.id in curatedIds || track.streamUrl in curatedStreams
+                        )
+                    }.thenByDescending { it.playCount }
+                )
+
+            finalizeFullTrackList(combined, safeLimit)
+        }
     }
 
     suspend fun searchArtists(query: String, limit: Int = 15): List<Artist> = withContext(Dispatchers.IO) {
@@ -406,6 +618,11 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             if (parsed.isNotEmpty()) return@withContext parsed.take(safeLimit)
         }
 
+        val audiusPlaylists = searchAudiusPlaylists(trimmed, safeLimit)
+        if (audiusPlaylists.isNotEmpty()) {
+            return@withContext audiusPlaylists.take(safeLimit)
+        }
+
         CURATED_PLAYLISTS
             .filter {
                 it.name.contains(trimmed, ignoreCase = true) ||
@@ -415,43 +632,470 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             .map { it.toPlaylist() }
     }
 
-    suspend fun resolvePlayableTrack(track: Track): Track =
-        fullAudioResolver.resolveFullTrack(track) { resolveFreshStreamUrl(track) }
-
-    suspend fun resolveFreshStreamUrl(track: Track): String = withContext(Dispatchers.IO) {
-        if (track.localUri != null && track.localUri.isNotBlank()) {
-            return@withContext track.localUri
-        }
-        if (track.isLive ||
-            track.source == TrackSource.LOCAL ||
-            track.source == TrackSource.RADIO ||
-            track.source == TrackSource.PODCAST ||
-            track.source == TrackSource.AUDIOBOOK
+    suspend fun resolvePlayableTrack(track: Track): Track {
+        if (!track.localUri.isNullOrBlank() ||
+            track.isLive ||
+            track.source in ALWAYS_BYPASS_SOURCES
         ) {
-            return@withContext track.streamUrl
+            return track
         }
 
-        if (track.id.startsWith(TRACK_ID_PREFIX) || track.source == TrackSource.DEEZER) {
-            val rawId = track.id.removePrefix(TRACK_ID_PREFIX)
-            if (rawId.isNotEmpty() && rawId.all { it.isDigit() }) {
-                val root = fetchDeezerJson("/track/$rawId")
-                val freshPreview = root?.optCleanString("preview").orEmpty()
-                if (freshPreview.startsWith("http")) {
-                    return@withContext freshPreview
+        if (track.source == TrackSource.AUDIUS &&
+            track.streamUrl.startsWith("http", ignoreCase = true) &&
+            !FullAudioResolver.isPreviewAudioUrl(track.streamUrl)
+        ) {
+            return track.copy(isPreviewOnly = false)
+        }
+
+        val resolved = fullAudioResolver.resolveFullTrackOrNull(track)
+        if (resolved != null && isValidFullAudioTrack(resolved)) {
+            return resolved
+        }
+
+        return if (FullAudioResolver.isPreviewAudioUrl(track.streamUrl)) {
+            track.copy(streamUrl = "", isPreviewOnly = false)
+        } else {
+            track.copy(isPreviewOnly = false)
+        }
+    }
+
+    suspend fun resolveFreshStreamUrl(track: Track): String {
+        val resolved = resolvePlayableTrack(track)
+        return if (FullAudioResolver.isPreviewAudioUrl(resolved.streamUrl)) "" else resolved.streamUrl
+    }
+
+    private suspend fun resolveCandidatesToFull(
+        candidates: List<Track>,
+        maxResolve: Int
+    ): List<Track> = coroutineScope {
+        if (candidates.isEmpty() || maxResolve <= 0) return@coroutineScope emptyList()
+
+        val immediateSeeds = mutableListOf<Track>()
+        val pending = mutableListOf<Track>()
+
+        for (candidate in candidates) {
+            val seed = matchCuratedSeed(candidate.title, candidate.artist)
+            if (seed != null) {
+                immediateSeeds.add(buildSeedTrack(seed, candidateMetadataToHydrated(candidate)))
+            } else if (candidate.durationSec == 0 || candidate.durationSec >= MIN_FULL_DURATION_SEC) {
+                pending.add(candidate)
+            }
+        }
+
+        val resolvedDynamic = pending
+            .take(maxResolve)
+            .chunked(4)
+            .flatMap { chunk ->
+                chunk.map { candidate ->
+                    async {
+                        val resolved = fullAudioResolver.resolveFullTrackOrNull(candidate) ?: return@async null
+                        if (!isValidFullAudioTrack(resolved)) return@async null
+                        resolved.copy(
+                            artworkUrl = resolved.artworkUrl ?: candidate.artworkUrl,
+                            artworkMirrors = resolved.artworkMirrors.ifEmpty { candidate.artworkMirrors },
+                            album = resolved.album.ifBlank { candidate.album },
+                            releaseDate = resolved.releaseDate.ifBlank { candidate.releaseDate },
+                            playCount = maxOf(resolved.playCount, candidate.playCount),
+                            isPreviewOnly = false
+                        )
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+        immediateSeeds + resolvedDynamic
+    }
+
+    private suspend fun resolveAppleEntriesToFull(
+        entries: List<AppleChartEntry>,
+        defaultGenre: String
+    ): List<Track> = coroutineScope {
+        if (entries.isEmpty()) return@coroutineScope emptyList()
+        entries.chunked(2).flatMap { chunk ->
+            chunk.map { entry ->
+                async {
+                    val matchedSeed = matchCuratedSeed(entry.title, entry.artist)
+                    if (matchedSeed != null) {
+                        return@async hydrateSeeds(listOf(matchedSeed)).firstOrNull()
+                    }
+                    val stub = Track(
+                        id = "apple_${normalizedTrackKey(entry.title, entry.artist).hashCode().toUInt()}",
+                        title = entry.title,
+                        artist = entry.artist,
+                        genre = defaultGenre,
+                        durationSec = 0,
+                        streamUrl = "",
+                        source = TrackSource.DEEZER,
+                        isPreviewOnly = false
+                    )
+                    val resolved = fullAudioResolver.resolveFullTrackOrNull(stub) ?: return@async null
+                    if (!isValidFullAudioTrack(resolved)) return@async null
+                    val artMeta = trackMetaByKeyCache[normalizedTrackKey(entry.title, entry.artist)]
+                        ?: fetchArtworkMetadataFromItunes(entry.title, entry.artist)
+                    resolved.copy(
+                        artworkUrl = resolved.artworkUrl ?: artMeta?.artworkUrl,
+                        artworkMirrors = resolved.artworkMirrors.ifEmpty { artMeta?.artworkMirrors.orEmpty() },
+                        album = resolved.album.ifBlank { artMeta?.album.orEmpty() },
+                        isPreviewOnly = false
+                    )
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    private suspend fun hydrateSeeds(
+        seeds: List<SeedTrack>,
+        audiusBatchMeta: Map<String, HydratedMeta>? = null
+    ): List<Track> = coroutineScope {
+        if (seeds.isEmpty()) return@coroutineScope emptyList()
+
+        val unresolvedSeeds = mutableListOf<SeedTrack>()
+        for (seed in seeds) {
+            val cached = seedArtworkCache[seed.audiusId]
+            if (cached != null && !cached.artworkUrl.isNullOrBlank()) continue
+
+            val chartMeta = lookupMetaByTitleArtist(seed.title, seed.artist)
+            if (chartMeta != null && !chartMeta.artworkUrl.isNullOrBlank()) {
+                seedArtworkCache[seed.audiusId] = chartMeta
+                continue
+            }
+            unresolvedSeeds.add(seed)
+        }
+
+        if (unresolvedSeeds.isNotEmpty()) {
+            val audiusMeta = audiusBatchMeta ?: fetchAudiusSeedMetadata(unresolvedSeeds)
+
+            unresolvedSeeds.take(24).chunked(4).forEach { chunk ->
+                chunk.map { seed ->
+                    async {
+                        val officialMeta = fetchArtworkForSeedFromSearch(seed)
+                        val audFallback = audiusMeta[seed.audiusId]
+                        val merged = mergeHydratedMeta(officialMeta, audFallback)
+                        if (merged != null && !merged.artworkUrl.isNullOrBlank()) {
+                            seedArtworkCache[seed.audiusId] = merged
+                        }
+                    }
+                }.awaitAll()
+            }
+
+            for (seed in unresolvedSeeds) {
+                if (seedArtworkCache[seed.audiusId] == null) {
+                    val audFallback = audiusMeta[seed.audiusId]
+                    if (audFallback != null && !audFallback.artworkUrl.isNullOrBlank()) {
+                        seedArtworkCache[seed.audiusId] = audFallback
+                    }
                 }
             }
         }
 
-        val query = listOf(track.title, track.artist).filter { it.isNotBlank() }.joinToString(" ")
-        if (query.isNotBlank()) {
-            val itunesFallback = searchItunesTracks(query, limit = 3, defaultGenre = track.genre)
-                .firstOrNull { it.streamUrl.startsWith("http") }
-            if (itunesFallback != null) {
-                return@withContext itunesFallback.streamUrl
+        seeds.map { seed ->
+            val meta = seedArtworkCache[seed.audiusId]
+                ?: audiusBatchMeta?.get(seed.audiusId)
+                ?: lookupMetaByTitleArtist(seed.title, seed.artist)
+            buildSeedTrack(seed, meta)
+        }
+    }
+
+    private fun buildSeedTrack(seed: SeedTrack, meta: HydratedMeta?): Track {
+        val artworkUrl = meta?.artworkUrl?.takeIf { it.isNotBlank() }
+            ?: ARTIST_PORTRAIT_BY_ID[seed.artistId]
+        return Track(
+            id = "$AUDIUS_TRACK_ID_PREFIX${seed.audiusId}",
+            title = seed.title,
+            artist = seed.artist,
+            artistId = seed.artistId,
+            album = meta?.album.orEmpty(),
+            genre = seed.genre,
+            mood = seed.mood,
+            durationSec = maxOf(seed.durationSec, MIN_FULL_DURATION_SEC),
+            artworkUrl = artworkUrl,
+            artworkMirrors = meta?.artworkMirrors.orEmpty(),
+            streamUrl = "$AUDIUS_PRIMARY_HOST/v1/tracks/${encodePathSegment(seed.audiusId)}/stream?app_name=$AUDIUS_APP_NAME",
+            source = TrackSource.AUDIUS,
+            isLive = false,
+            isSmartPick = false,
+            releaseDate = meta?.releaseDate.orEmpty(),
+            playCount = meta?.playCount ?: 0L,
+            externalUrl = "https://audius.co/tracks/${seed.audiusId}",
+            isPreviewOnly = false
+        )
+    }
+
+    private suspend fun fetchAudiusSeedMetadata(seeds: List<SeedTrack>): Map<String, HydratedMeta> {
+        if (seeds.isEmpty()) return emptyMap()
+        val idParams = seeds.joinToString("&") { "id=${encodeUrlParam(it.audiusId)}" }
+        val pathAndQuery = "/v1/tracks?app_name=$AUDIUS_APP_NAME&$idParams"
+        for (host in AUDIUS_HOSTS) {
+            val body = client.getText("$host$pathAndQuery") ?: continue
+            val data = try {
+                JSONObject(body).optJSONArray("data")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+
+            val result = HashMap<String, HydratedMeta>(data.length())
+            for (i in 0 until data.length()) {
+                val obj = data.optJSONObject(i) ?: continue
+                val id = obj.optCleanString("id")
+                if (id.isEmpty()) continue
+                val (artworkUrl, mirrors) = extractAudiusArtwork(obj.optJSONObject("artwork"))
+                result[id] = HydratedMeta(
+                    artworkUrl = artworkUrl,
+                    artworkMirrors = mirrors,
+                    releaseDate = obj.optCleanString("release_date").take(10),
+                    playCount = obj.optLong("play_count", 0L).coerceAtLeast(0L)
+                )
+            }
+            return result
+        }
+        return emptyMap()
+    }
+
+    private suspend fun fetchArtworkForSeedFromSearch(seed: SeedTrack): HydratedMeta? {
+        val primaryArtist = extractPrimaryArtist(seed.artist)
+        val query = listOf(seed.title, primaryArtist).filter { it.isNotBlank() }.joinToString(" ")
+        if (query.isBlank()) return null
+
+        if (!isInRateLimitCooldown()) {
+            val root = fetchDeezerJson(
+                "/search/track?q=${encodeUrlParam(query)}&limit=1",
+                allowRetryOnRateLimit = false
+            )
+            val firstObj = root?.optJSONArray("data")?.optJSONObject(0)
+            if (firstObj != null) {
+                val itemTitle = firstObj.optCleanString("title")
+                    .ifBlank { firstObj.optCleanString("title_short") }
+                if (titlesRoughlyMatch(seed.title, itemTitle)) {
+                    val meta = extractDeezerMetadata(firstObj)
+                    if (meta != null && !meta.artworkUrl.isNullOrBlank()) {
+                        cacheMetaForKey(seed.title, seed.artist, meta)
+                        return meta
+                    }
+                }
             }
         }
 
-        track.streamUrl
+        return fetchArtworkMetadataFromItunes(seed.title, primaryArtist)
+    }
+
+    private suspend fun fetchArtworkMetadataFromItunes(title: String, artist: String): HydratedMeta? {
+        val query = listOf(title, artist).filter { it.isNotBlank() }.joinToString(" ")
+        if (query.isBlank()) return null
+        val url = "$ITUNES_PH_SEARCH_URL&term=${encodeUrlParam(query)}&limit=1"
+        val body = client.getText(url) ?: return null
+        return try {
+            val item = JSONObject(body).optJSONArray("results")?.optJSONObject(0) ?: return null
+            val itemTitle = item.optCleanString("trackName").ifBlank { item.optCleanString("trackCensoredName") }
+            if (!titlesRoughlyMatch(title, itemTitle)) return null
+            val rawArt100 = item.optCleanString("artworkUrl100").ifBlank { item.optCleanString("artworkUrl60") }
+            val upgraded = upgradeItunesArtwork(rawArt100) ?: return null
+            val meta = HydratedMeta(
+                artworkUrl = upgraded,
+                artworkMirrors = listOfNotNull(rawArt100.takeIf { it.isNotBlank() && it != upgraded }),
+                album = item.optCleanString("collectionName"),
+                releaseDate = item.optCleanString("releaseDate").take(10)
+            )
+            cacheMetaForKey(title, artist, meta)
+            meta
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private suspend fun searchAudiusFullTracks(
+        query: String,
+        limit: Int = 25,
+        defaultGenre: String = "Music"
+    ): List<Track> {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val safeLimit = limit.coerceIn(1, 50)
+        val pathAndQuery =
+            "/v1/tracks/search?app_name=$AUDIUS_APP_NAME&limit=$safeLimit&query=${encodeUrlParam(trimmed)}"
+        for (host in AUDIUS_HOSTS) {
+            val body = client.getText("$host$pathAndQuery") ?: continue
+            val data = try {
+                JSONObject(body).optJSONArray("data")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+            return parseAudiusFullTracks(data, defaultGenre)
+        }
+        return emptyList()
+    }
+
+    private suspend fun getAudiusTrendingFullTracks(
+        genre: String? = null,
+        limit: Int = 20
+    ): List<Track> {
+        val safeLimit = limit.coerceIn(1, 50)
+        val genreParam = genre?.trim()?.takeIf {
+            it.isNotEmpty() && !it.equals("All", ignoreCase = true)
+        }?.let { "&genre=${encodeUrlParam(it)}" }.orEmpty()
+        val pathAndQuery = "/v1/tracks/trending?app_name=$AUDIUS_APP_NAME&limit=$safeLimit$genreParam"
+        for (host in AUDIUS_HOSTS) {
+            val body = client.getText("$host$pathAndQuery") ?: continue
+            val data = try {
+                JSONObject(body).optJSONArray("data")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+            return parseAudiusFullTracks(data, genre ?: "Music")
+        }
+        return emptyList()
+    }
+
+    private suspend fun searchArtistMatchedAudius(
+        artistName: String,
+        defaultGenre: String,
+        limit: Int
+    ): List<Track> {
+        val cleanName = artistName.trim()
+        if (cleanName.isEmpty()) return emptyList()
+        val hits = searchAudiusFullTracks(cleanName, limit = limit.coerceAtLeast(20), defaultGenre = defaultGenre)
+        return hits.filter { track ->
+            matchesArtistName(track.artist, track.title, cleanName) &&
+                !isNoiseSearchResult(track.title)
+        }
+    }
+
+    private fun isNoiseSearchResult(title: String): Boolean {
+        val norm = normalizeText(title)
+        if (norm.isEmpty()) return false
+        return NOISE_SEARCH_REGEXES.any { it.containsMatchIn(norm) }
+    }
+
+    private suspend fun fetchAudiusPlaylistFullTracks(playlistId: String): List<Track> {
+        val pathAndQuery = "/v1/playlists/${encodePathSegment(playlistId)}/tracks?app_name=$AUDIUS_APP_NAME"
+        for (host in AUDIUS_HOSTS) {
+            val body = client.getText("$host$pathAndQuery") ?: continue
+            val data = try {
+                JSONObject(body).optJSONArray("data")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+            return parseAudiusFullTracks(data, "Music")
+        }
+        return emptyList()
+    }
+
+    private suspend fun searchAudiusPlaylists(query: String, limit: Int): List<Playlist> {
+        val pathAndQuery =
+            "/v1/playlists/search?app_name=$AUDIUS_APP_NAME&limit=$limit&query=${encodeUrlParam(query)}"
+        for (host in AUDIUS_HOSTS) {
+            val body = client.getText("$host$pathAndQuery") ?: continue
+            val data = try {
+                JSONObject(body).optJSONArray("data")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            } ?: continue
+            return buildList {
+                for (i in 0 until data.length()) {
+                    val obj = data.optJSONObject(i) ?: continue
+                    val id = obj.optCleanString("id")
+                    val name = obj.optCleanString("playlist_name").ifBlank { obj.optCleanString("name") }
+                    if (id.isEmpty() || name.isEmpty()) continue
+                    val (artworkUrl, _) = extractAudiusArtwork(obj.optJSONObject("artwork"))
+                    val playlistId = "$AUDIUS_PLAYLIST_ID_PREFIX$id"
+                    val (colorStart, colorEnd) = coverPaletteForKey(playlistId)
+                    val author = obj.optJSONObject("user")?.optCleanString("name").orEmpty()
+                        .ifBlank { "Audius Curator" }
+                    add(
+                        Playlist(
+                            id = playlistId,
+                            name = name,
+                            description = obj.optCleanString("description"),
+                            coverColorStart = colorStart,
+                            coverColorEnd = colorEnd,
+                            artworkUrl = artworkUrl,
+                            isUserCreated = false,
+                            isSystemMix = false,
+                            authorName = author
+                        )
+                    )
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    private fun parseAudiusFullTracks(array: JSONArray, defaultGenre: String): List<Track> = buildList {
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            parseAudiusFullTrack(obj, defaultGenre)?.let(::add)
+        }
+    }
+
+    private fun parseAudiusFullTrack(obj: JSONObject, defaultGenre: String): Track? {
+        val id = obj.optCleanString("id")
+        val title = obj.optCleanString("title")
+        if (id.isEmpty() || title.isEmpty()) return null
+
+        val accessStreamable = obj.optJSONObject("access")?.optBoolean("stream", true) ?: true
+        val isStreamable = obj.optBoolean("is_streamable", true) && accessStreamable
+        val durationSec = obj.optInt("duration", 0).coerceAtLeast(0)
+        if (!isStreamable || durationSec < MIN_FULL_DURATION_SEC) {
+            return null
+        }
+
+        val userObj = obj.optJSONObject("user")
+        val artistName = userObj?.optCleanString("name")
+            ?.ifBlank { userObj.optCleanString("handle") }
+            .orEmpty()
+        val artistId = userObj?.optCleanString("id").orEmpty()
+        val (rawArtworkUrl, mirrors) = extractAudiusArtwork(obj.optJSONObject("artwork"))
+        val cachedMeta = lookupMetaByTitleArtist(title, artistName)
+        val artworkUrl = rawArtworkUrl ?: cachedMeta?.artworkUrl
+
+        return Track(
+            id = "$AUDIUS_TRACK_ID_PREFIX$id",
+            title = title,
+            artist = artistName,
+            artistId = artistId,
+            album = cachedMeta?.album.orEmpty(),
+            genre = obj.optCleanString("genre").ifBlank { defaultGenre }.ifBlank { "Music" },
+            mood = obj.optCleanString("mood"),
+            durationSec = durationSec,
+            artworkUrl = artworkUrl,
+            artworkMirrors = mirrors.ifEmpty { cachedMeta?.artworkMirrors.orEmpty() },
+            streamUrl = "$AUDIUS_PRIMARY_HOST/v1/tracks/${encodePathSegment(id)}/stream?app_name=$AUDIUS_APP_NAME",
+            source = TrackSource.AUDIUS,
+            isLive = false,
+            isSmartPick = false,
+            releaseDate = obj.optCleanString("release_date").take(10).ifBlank { cachedMeta?.releaseDate.orEmpty() },
+            playCount = obj.optLong("play_count", 0L).coerceAtLeast(0L),
+            externalUrl = "https://audius.co/tracks/$id",
+            isPreviewOnly = false
+        )
+    }
+
+    private fun extractAudiusArtwork(artworkObj: JSONObject?): Pair<String?, List<String>> {
+        if (artworkObj == null) return null to emptyList()
+        val primary = artworkObj.optCleanString("480x480").ifBlank { null }
+            ?: artworkObj.optCleanString("1000x1000").ifBlank { null }
+            ?: artworkObj.optCleanString("150x150").ifBlank { null }
+
+        val mirrorsArray = artworkObj.optJSONArray("mirrors")
+        val mirrors = buildList {
+            if (mirrorsArray != null) {
+                for (i in 0 until mirrorsArray.length()) {
+                    val value = mirrorsArray.optString(i, "").trim()
+                    if (value.isNotEmpty() && value != "null") add(value)
+                }
+            }
+        }
+        return primary to mirrors
     }
 
     private suspend fun refreshCuratedArtists(seeds: List<CuratedArtistSeed>): List<Artist> = coroutineScope {
@@ -469,25 +1113,25 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         }
     }
 
-    private suspend fun fetchMultiArtistTopTracks(
+    private suspend fun fetchMultiArtistChartCandidates(
         artistIds: List<String>,
         genre: String,
         perArtist: Int
     ): List<Track> = coroutineScope {
         artistIds.chunked(3).flatMap { chunk ->
             chunk.map { id ->
-                async { fetchDeezerTracks("/artist/$id/top?limit=$perArtist", defaultGenre = genre) }
+                async { fetchDeezerChartCandidates("/artist/$id/top?limit=$perArtist", defaultGenre = genre) }
             }.awaitAll()
         }.flatten()
     }
 
-    private suspend fun fetchDeezerTracks(pathAndQuery: String, defaultGenre: String): List<Track> {
+    private suspend fun fetchDeezerChartCandidates(pathAndQuery: String, defaultGenre: String): List<Track> {
         val root = fetchDeezerJson(pathAndQuery) ?: return emptyList()
         val data = root.optJSONArray("data") ?: return emptyList()
         return buildList {
             for (i in 0 until data.length()) {
                 val item = data.optJSONObject(i) ?: continue
-                parseDeezerTrack(item, defaultGenre)?.let(::add)
+                parseDeezerChartCandidate(item, defaultGenre)?.let(::add)
             }
         }
     }
@@ -507,31 +1151,6 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     if (title.isNotEmpty() && artist.isNotEmpty()) {
                         add(AppleChartEntry(title = title, artist = artist))
                     }
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Throwable) {
-            emptyList()
-        }
-    }
-
-    private suspend fun searchItunesTracks(
-        query: String,
-        limit: Int = 20,
-        defaultGenre: String = "Music"
-    ): List<Track> {
-        val trimmed = query.trim()
-        if (trimmed.isEmpty()) return emptyList()
-        val safeLimit = limit.coerceIn(1, 50)
-        val url = "$ITUNES_PH_SEARCH_URL&term=${encodeUrlParam(trimmed)}&limit=$safeLimit"
-        val body = client.getText(url) ?: return emptyList()
-        return try {
-            val results = JSONObject(body).optJSONArray("results") ?: return emptyList()
-            buildList {
-                for (i in 0 until results.length()) {
-                    val item = results.optJSONObject(i) ?: continue
-                    parseItunesTrack(item, defaultGenre)?.let(::add)
                 }
             }
         } catch (e: CancellationException) {
@@ -589,17 +1208,50 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
 
     private fun isInRateLimitCooldown(): Boolean = System.currentTimeMillis() < rateLimitedUntilMs.get()
 
-    internal fun parseDeezerTrack(obj: JSONObject, defaultGenre: String = "Music"): Track? {
+    /**
+     * Parses Deezer metadata ONLY (artwork, title, artist, album, duration, rank).
+     * Never reads or stores Deezer's 30-second `preview` URL.
+     */
+    internal fun parseDeezerChartCandidate(obj: JSONObject, defaultGenre: String = "Music"): Track? {
         val rawId = obj.optCleanString("id")
         val title = obj.optCleanString("title").ifBlank { obj.optCleanString("title_short") }
-        val preview = obj.optCleanString("preview")
-        if (rawId.isEmpty() || rawId == "0" || title.isEmpty() || !preview.startsWith("http")) {
+        if (rawId.isEmpty() || rawId == "0" || title.isEmpty()) {
             return null
         }
 
         val artistObj = obj.optJSONObject("artist")
         val artistName = artistObj?.optCleanString("name").orEmpty()
         val artistId = artistObj?.optCleanString("id").orEmpty()
+        val meta = extractDeezerMetadata(obj)
+        if (meta != null && artistName.isNotEmpty()) {
+            cacheMetaForKey(title, artistName, meta)
+        }
+
+        val link = obj.optCleanString("link").ifBlank { "https://www.deezer.com/track/$rawId" }
+
+        return Track(
+            id = "$TRACK_ID_PREFIX$rawId",
+            title = title,
+            artist = artistName,
+            artistId = artistId,
+            album = meta?.album.orEmpty(),
+            genre = defaultGenre.ifBlank { "Music" },
+            durationSec = obj.optInt("duration", 0).coerceAtLeast(0),
+            artworkUrl = meta?.artworkUrl,
+            artworkMirrors = meta?.artworkMirrors.orEmpty(),
+            streamUrl = "",
+            source = TrackSource.DEEZER,
+            isLive = false,
+            isSmartPick = false,
+            releaseDate = meta?.releaseDate.orEmpty(),
+            playCount = meta?.playCount ?: 0L,
+            externalUrl = link,
+            isPreviewOnly = false
+        )
+    }
+
+    private fun extractDeezerMetadata(obj: JSONObject): HydratedMeta? {
+        val artistObj = obj.optJSONObject("artist")
         val artistPic = artistObj?.optCleanString("picture_big")?.ifBlank { null }
             ?: artistObj?.optCleanString("picture_medium")?.ifBlank { null }
 
@@ -613,65 +1265,13 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             .distinct()
             .filter { it != artworkUrl }
 
-        val link = obj.optCleanString("link").ifBlank { "https://www.deezer.com/track/$rawId" }
-
-        return Track(
-            id = "$TRACK_ID_PREFIX$rawId",
-            title = title,
-            artist = artistName,
-            artistId = artistId,
-            album = albumTitle,
-            genre = defaultGenre.ifBlank { "Music" },
-            durationSec = obj.optInt("duration", 0).coerceAtLeast(0),
+        if (artworkUrl == null && albumTitle.isEmpty()) return null
+        return HydratedMeta(
             artworkUrl = artworkUrl,
             artworkMirrors = mirrors,
-            streamUrl = preview,
-            source = TrackSource.DEEZER,
-            isLive = false,
-            isSmartPick = false,
+            album = albumTitle,
             releaseDate = albumObj?.optCleanString("release_date").orEmpty(),
-            playCount = obj.optLong("rank", 0L).coerceAtLeast(0L),
-            externalUrl = link,
-            isPreviewOnly = false
-        )
-    }
-
-    internal fun parseItunesTrack(obj: JSONObject, defaultGenre: String = "Music"): Track? {
-        val rawId = obj.optCleanString("trackId")
-        val title = obj.optCleanString("trackName").ifBlank { obj.optCleanString("trackCensoredName") }
-        val preview = obj.optCleanString("previewUrl")
-        if (rawId.isEmpty() || rawId == "0" || title.isEmpty() || !preview.startsWith("http")) {
-            return null
-        }
-
-        val rawArt100 = obj.optCleanString("artworkUrl100")
-            .ifBlank { obj.optCleanString("artworkUrl60") }
-        val upgradedArt = upgradeItunesArtwork(rawArt100)
-        val mirrors = listOfNotNull(rawArt100.takeIf { it.isNotBlank() && it != upgradedArt })
-        val rawArtistId = obj.optCleanString("artistId")
-        val artistId = if (rawArtistId.isNotEmpty() && rawArtistId != "0") "it_art_$rawArtistId" else ""
-        val genre = obj.optCleanString("primaryGenreName").ifBlank { defaultGenre }.ifBlank { "Music" }
-        val durationSec = (obj.optLong("trackTimeMillis", 0L) / 1000L).toInt().coerceAtLeast(0)
-        val externalUrl = obj.optCleanString("trackViewUrl")
-            .ifBlank { obj.optCleanString("collectionViewUrl") }
-
-        return Track(
-            id = "$ITUNES_ID_PREFIX$rawId",
-            title = title,
-            artist = obj.optCleanString("artistName"),
-            artistId = artistId,
-            album = obj.optCleanString("collectionName"),
-            genre = genre,
-            durationSec = durationSec,
-            artworkUrl = upgradedArt,
-            artworkMirrors = mirrors,
-            streamUrl = preview,
-            source = TrackSource.ITUNES,
-            isLive = false,
-            isSmartPick = false,
-            releaseDate = obj.optCleanString("releaseDate").take(10),
-            externalUrl = externalUrl,
-            isPreviewOnly = false
+            playCount = obj.optLong("rank", 0L).coerceAtLeast(0L)
         )
     }
 
@@ -713,7 +1313,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         val creatorName = obj.optJSONObject("creator")?.optCleanString("name")?.ifBlank { null }
             ?: obj.optJSONObject("user")?.optCleanString("name")?.ifBlank { null }
             ?: fallback?.authorName
-            ?: "Deezer"
+            ?: "Sonora Charts"
 
         val description = fallback?.description
             ?: obj.optCleanString("description")
@@ -736,6 +1336,139 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         )
     }
 
+    private fun finalizeFullTrackList(tracks: List<Track>, limit: Int): List<Track> {
+        val valid = tracks
+            .filter(::isValidFullAudioTrack)
+            .map { if (it.isPreviewOnly) it.copy(isPreviewOnly = false) else it }
+        return deduplicateTracks(valid).take(limit.coerceAtLeast(1))
+    }
+
+    private fun isValidFullAudioTrack(track: Track): Boolean {
+        return track.source == TrackSource.AUDIUS &&
+            !track.isPreviewOnly &&
+            track.durationSec >= MIN_FULL_DURATION_SEC &&
+            track.streamUrl.startsWith("http", ignoreCase = true) &&
+            !FullAudioResolver.isPreviewAudioUrl(track.streamUrl)
+    }
+
+    private fun matchCuratedSeed(title: String, artist: String): SeedTrack? {
+        val normTitle = normalizeTitleForMatch(title)
+        val normArtist = normalizeText(artist)
+        val primaryArtist = normalizeText(extractPrimaryArtist(artist))
+        if (normTitle.isEmpty()) return null
+
+        return ALL_SEED_TRACKS.firstOrNull { seed ->
+            val seedTitle = normalizeTitleForMatch(seed.title)
+            val seedPrimaryArtist = normalizeText(extractPrimaryArtist(seed.artist))
+            val titleMatch = normTitle == seedTitle
+            val artistMatch = normArtist.isEmpty() ||
+                normArtist == normalizeText(seed.artist) ||
+                (seedPrimaryArtist.length >= 2 && normArtist.contains(seedPrimaryArtist)) ||
+                (primaryArtist.length >= 2 && seedPrimaryArtist == primaryArtist)
+            titleMatch && artistMatch
+        }
+    }
+
+    private fun titlesRoughlyMatch(expectedTitle: String, candidateTitle: String): Boolean {
+        val a = normalizeTitleForMatch(expectedTitle)
+        val b = normalizeTitleForMatch(candidateTitle)
+        if (a.isEmpty() || b.isEmpty()) return false
+        return a == b || a.contains(b) || b.contains(a)
+    }
+
+    private fun findMatchingCuratedSeeds(query: String): List<SeedTrack> {
+        val qNorm = normalizeText(query)
+        val qTokens = tokenizeWords(query)
+        if (qNorm.isEmpty()) return emptyList()
+
+        return ALL_SEED_TRACKS.filter { seed ->
+            val haystack = normalizeText("${seed.title} ${seed.artist} ${seed.genre}")
+            val hayTokens = tokenizeWords(haystack)
+            haystack.contains(qNorm) || (qTokens.isNotEmpty() && qTokens.all { token ->
+                hayTokens.any { it == token || (token.length >= 3 && it.startsWith(token)) }
+            })
+        }
+    }
+
+    private fun scoreSearchRelevance(
+        track: Track,
+        queryNorm: String,
+        queryTokens: List<String>,
+        isCuratedSeed: Boolean
+    ): Int {
+        val titleNorm = normalizeText(track.title)
+        val artistNorm = normalizeText(track.artist)
+        val combinedNorm = "$titleNorm $artistNorm"
+        var score = 0
+
+        if (titleNorm == queryNorm) score += 120
+        else if (artistNorm == queryNorm) score += 100
+        else if (titleNorm.startsWith(queryNorm)) score += 70
+        else if (artistNorm.startsWith(queryNorm)) score += 60
+        else if (titleNorm.contains(queryNorm)) score += 45
+        else if (combinedNorm.contains(queryNorm)) score += 35
+
+        if (queryTokens.isNotEmpty()) {
+            val combinedTokens = tokenizeWords(combinedNorm).toSet()
+            val matched = queryTokens.count { q -> combinedTokens.any { it == q || it.startsWith(q) } }
+            score += (matched * 20) / queryTokens.size
+        }
+
+        if (isCuratedSeed) score += 40
+        val isVariant = VARIANT_KEYWORDS.any { titleNorm.contains(it) }
+        if (!isVariant) score += 25
+        return score
+    }
+
+    private fun matchesArtistName(trackArtist: String, trackTitle: String, targetArtistName: String): Boolean {
+        val normTarget = normalizeText(targetArtistName)
+        if (normTarget.isEmpty()) return false
+        val targetTokens = tokenizeWords(targetArtistName)
+        val artistNorm = normalizeText(trackArtist)
+        val titleNorm = normalizeText(trackTitle)
+        if (artistNorm.contains(normTarget) || titleNorm.contains(normTarget)) {
+            return true
+        }
+        if (targetTokens.isEmpty()) return false
+        val combinedTokens = (tokenizeWords(trackArtist) + tokenizeWords(trackTitle)).toSet()
+        return targetTokens.all { it in combinedTokens }
+    }
+
+    private fun cacheMetaForKey(title: String, artist: String, meta: HydratedMeta) {
+        val fullKey = normalizedTrackKey(title, artist)
+        trackMetaByKeyCache.putIfAbsent(fullKey, meta)
+        val primaryKey = normalizedTrackKey(title, extractPrimaryArtist(artist))
+        trackMetaByKeyCache.putIfAbsent(primaryKey, meta)
+    }
+
+    private fun lookupMetaByTitleArtist(title: String, artist: String): HydratedMeta? {
+        return trackMetaByKeyCache[normalizedTrackKey(title, artist)]
+            ?: trackMetaByKeyCache[normalizedTrackKey(title, extractPrimaryArtist(artist))]
+    }
+
+    private fun candidateMetadataToHydrated(candidate: Track): HydratedMeta? {
+        if (candidate.artworkUrl.isNullOrBlank() && candidate.album.isBlank()) return null
+        return HydratedMeta(
+            artworkUrl = candidate.artworkUrl,
+            artworkMirrors = candidate.artworkMirrors,
+            album = candidate.album,
+            releaseDate = candidate.releaseDate,
+            playCount = candidate.playCount
+        )
+    }
+
+    private fun mergeHydratedMeta(primary: HydratedMeta?, secondary: HydratedMeta?): HydratedMeta? {
+        if (primary == null) return secondary
+        if (secondary == null) return primary
+        return HydratedMeta(
+            artworkUrl = primary.artworkUrl ?: secondary.artworkUrl,
+            artworkMirrors = primary.artworkMirrors.ifEmpty { secondary.artworkMirrors },
+            album = primary.album.ifBlank { secondary.album },
+            releaseDate = primary.releaseDate.ifBlank { secondary.releaseDate },
+            playCount = maxOf(primary.playCount, secondary.playCount)
+        )
+    }
+
     private fun upgradeItunesArtwork(rawUrl: String): String? {
         if (rawUrl.isBlank()) return null
         return rawUrl
@@ -751,6 +1484,41 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             trimmed.startsWith("dz_") -> trimmed.removePrefix("dz_")
             else -> trimmed
         }
+    }
+
+    private fun extractPrimaryArtist(rawArtist: String): String {
+        val cleaned = rawArtist.trim()
+        if (cleaned.isEmpty()) return ""
+        return cleaned.split(ARTIST_SPLIT_REGEX, limit = 2)
+            .firstOrNull()
+            ?.trim()
+            .orEmpty()
+    }
+
+    private fun normalizeTitleForMatch(rawTitle: String): String {
+        val stripped = rawTitle
+            .replace(PAREN_REGEX, " ")
+            .replace(BRACKET_REGEX, " ")
+            .replace(FEAT_SUFFIX_REGEX, "")
+        return normalizeText(stripped)
+    }
+
+    private fun normalizeText(raw: String): String {
+        if (raw.isBlank()) return ""
+        val decomposed = Normalizer.normalize(raw, Normalizer.Form.NFD)
+        return DIACRITICS_REGEX.replace(decomposed, "")
+            .lowercase(Locale.ROOT)
+            .replace("'", "")
+            .replace("\u2019", "")
+            .replace(NON_ALNUM_REGEX, " ")
+            .replace(MULTI_SPACE_REGEX, " ")
+            .trim()
+    }
+
+    private fun tokenizeWords(raw: String): List<String> {
+        val norm = normalizeText(raw)
+        if (norm.isEmpty()) return emptyList()
+        return norm.split(' ').filter { it.isNotEmpty() }
     }
 
     private fun playlistDefaultGenre(rawPlaylistId: String): String = when (rawPlaylistId) {
@@ -781,20 +1549,6 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         return out
     }
 
-    private fun extractFeaturedPhHits(pool: List<Track>): List<Track> {
-        if (pool.isEmpty()) return emptyList()
-        return PH_ANCHOR_MATCHERS.mapNotNull { (titleTarget, artistTarget) ->
-            pool.firstOrNull { track ->
-                track.title.lowercase(Locale.ROOT).trim() == titleTarget &&
-                    track.artist.lowercase(Locale.ROOT).contains(artistTarget)
-            } ?: pool.firstOrNull { track ->
-                val t = track.title.lowercase(Locale.ROOT).trim()
-                (t.startsWith("$titleTarget ") || t.startsWith("$titleTarget(")) &&
-                    track.artist.lowercase(Locale.ROOT).contains(artistTarget)
-            }
-        }
-    }
-
     private fun interleaveTrackLists(first: List<Track>, second: List<Track>): List<Track> {
         val out = ArrayList<Track>(first.size + second.size)
         val maxLen = maxOf(first.size, second.size)
@@ -807,11 +1561,13 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
 
     private fun deduplicateTracks(tracks: List<Track>): List<Track> {
         val seenIds = HashSet<String>(tracks.size)
+        val seenStreamUrls = HashSet<String>(tracks.size)
         val seenTitleArtist = HashSet<String>(tracks.size)
         return buildList {
             for (t in tracks) {
                 val key = normalizedTrackKey(t.title, t.artist)
-                if (seenIds.add(t.id) && seenTitleArtist.add(key)) {
+                val streamOk = t.streamUrl.isBlank() || seenStreamUrls.add(t.streamUrl)
+                if (seenIds.add(t.id) && streamOk && seenTitleArtist.add(key)) {
                     add(t)
                 }
             }
@@ -819,7 +1575,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     private fun normalizedTrackKey(title: String, artist: String): String =
-        "${title.lowercase(Locale.ROOT).trim()}|${artist.lowercase(Locale.ROOT).trim()}"
+        "${normalizeTitleForMatch(title)}|${normalizeText(artist)}"
 
     private suspend fun cachedTracks(key: String, loader: suspend () -> List<Track>): List<Track> {
         val now = System.currentTimeMillis()
@@ -863,6 +1619,24 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     private data class CacheEntry<T>(
         val value: T,
         val timestampMs: Long
+    )
+
+    private data class HydratedMeta(
+        val artworkUrl: String? = null,
+        val artworkMirrors: List<String> = emptyList(),
+        val album: String = "",
+        val releaseDate: String = "",
+        val playCount: Long = 0L
+    )
+
+    private data class SeedTrack(
+        val title: String,
+        val artist: String,
+        val artistId: String,
+        val audiusId: String,
+        val durationSec: Int,
+        val genre: String,
+        val mood: String = ""
     )
 
     private data class AppleChartEntry(
@@ -915,13 +1689,19 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     companion object {
+        private const val AUDIUS_PRIMARY_HOST = "https://api.audius.co"
+        private const val AUDIUS_FALLBACK_HOST = "https://discoveryprovider.audius.co"
+        private const val AUDIUS_APP_NAME = "Sonora"
+        private val AUDIUS_HOSTS = listOf(AUDIUS_PRIMARY_HOST, AUDIUS_FALLBACK_HOST)
+
         private const val DEEZER_BASE = "https://api.deezer.com"
         private const val APPLE_PH_CHART_URL = "https://rss.marketingtools.apple.com/api/v2/ph/music/most-played/25/songs.json"
         private const val ITUNES_PH_SEARCH_URL = "https://itunes.apple.com/search?country=PH&media=music&entity=song"
 
+        private const val AUDIUS_TRACK_ID_PREFIX = "aud_"
         private const val TRACK_ID_PREFIX = "dz_"
-        private const val ITUNES_ID_PREFIX = "it_"
         private const val PLAYLIST_ID_PREFIX = "dz_pl_"
+        private const val AUDIUS_PLAYLIST_ID_PREFIX = "aud_pl_"
 
         private const val PL_TOP_HITS_PH_2026 = "15507256221"
         private const val PL_OPM_VIRAL_HITS = "13461654563"
@@ -929,6 +1709,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         private const val PL_GLOBAL_TOP_50 = "3155776842"
         private const val PL_THROWBACK_OPM_2000S = "11970710661"
 
+        private const val MIN_FULL_DURATION_SEC = 90
         private const val CACHE_TTL_MS = 60_000L
         private const val RATE_LIMIT_COOLDOWN_MS = 3_000L
 
@@ -939,6 +1720,13 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         private const val ARTIST_DIONELA = "69165172"
         private const val ARTIST_BINI = "320392011"
 
+        private val ALWAYS_BYPASS_SOURCES = setOf(
+            TrackSource.LOCAL,
+            TrackSource.PODCAST,
+            TrackSource.AUDIOBOOK,
+            TrackSource.RADIO
+        )
+
         private val OPM_SPOTLIGHT_ARTIST_IDS = listOf(
             ARTIST_CUP_OF_JOE,
             ARTIST_TJ_MONTERDE,
@@ -948,14 +1736,88 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             ARTIST_BINI
         )
 
-        private val PH_ANCHOR_MATCHERS = listOf(
-            "multo" to "cup of joe",
-            "tingin" to "cup of joe",
-            "dilaw" to "maki",
-            "palagi" to "tj monterde",
-            "pasilyo" to "sunkissed lola",
-            "sining" to "dionela"
+        private val PAREN_REGEX = Regex("""\([^)]*\)""")
+        private val BRACKET_REGEX = Regex("""\[[^\]]*]""")
+        private val FEAT_SUFFIX_REGEX = Regex("""\s*\b(?:feat|ft)\.?\s+.*$""", RegexOption.IGNORE_CASE)
+        private val ARTIST_SPLIT_REGEX = Regex(
+            """\s*,\s*|\s+&\s+|\s*/\s*|\s*;\s*|\s+\b(?:feat\.?|ft\.?|with|x)\b\s+""",
+            RegexOption.IGNORE_CASE
         )
+        private val DIACRITICS_REGEX = Regex("""\p{InCombiningDiacriticalMarks}+""")
+        private val NON_ALNUM_REGEX = Regex("""[^a-z0-9]""")
+        private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
+
+        private val VARIANT_KEYWORDS = listOf(
+            "remix", "sped up", "slowed", "nightcore", "8d", "reverb",
+            "karaoke", "instrumental", "cover", "flip", "bootleg", "mashup"
+        )
+
+        private val NOISE_SEARCH_REGEXES = listOf(
+            Regex("""\bkaraoke\b"""),
+            Regex("""\binstrumental\b"""),
+            Regex("""\btype\s*beat\b"""),
+            Regex("""\bai\s*cover\b"""),
+            Regex("""\bscrewed\b"""),
+            Regex("""\bchopped\b"""),
+            Regex("""\bscrewed\s*n\s*chopped\b"""),
+            Regex("""\bdrill[\s-]*mix\b"""),
+            Regex("""\bparody\b"""),
+            Regex("""\bminus\s*\d+\b""")
+        )
+
+        private val PH_SEED_TRACKS = listOf(
+            SeedTrack("Multo", "Cup of Joe", "60687062", "jz39y6M", 289, "OPM", "Emotional"),
+            SeedTrack("Tingin", "Cup of Joe, Janine Teñoso", "60687062", "VK6Zql6", 221, "OPM", "Romantic"),
+            SeedTrack("Misteryoso", "Cup of Joe", "60687062", "agVv6Po", 223, "OPM", "Dreamy"),
+            SeedTrack("Palagi", "TJ Monterde", "7189292", "gb4w8Mv", 240, "OPM", "Romantic"),
+            SeedTrack("Dating Tayo", "TJ Monterde", "7189292", "zyM8wXp", 239, "OPM", "Nostalgic"),
+            SeedTrack("Mahika", "Adie, Janine Berdin", "242188", "QKAWgZG", 204, "OPM", "Chill"),
+            SeedTrack("Paraluman", "Adie", "242188", "Kd8vb0z", 310, "OPM", "Romantic"),
+            SeedTrack("Dilaw", "Maki", "87317692", "92dRdP2", 192, "OPM", "Upbeat"),
+            SeedTrack("Pasilyo", "SunKissed Lola", "179158087", "gvobVzq", 269, "OPM", "Romantic"),
+            SeedTrack("Pagsamo", "Arthur Nery", "55640202", "7O2WQEP", 297, "OPM", "Soulful"),
+            SeedTrack("Pelikula", "Janine Teñoso feat. Arthur Nery", "55640202", "80RvP5O", 206, "OPM", "Dreamy"),
+            SeedTrack("Pantropiko", "BINI", "320392011", "xyGXRK9", 264, "P-Pop", "Sunny"),
+            SeedTrack("Headshot", "Hev Abi", "126789982", "4kq0Zxr", 170, "Pinoy Hip-Hop", "Hype"),
+            SeedTrack("Sining", "Dionela ft. Jay R", "69165172", "Y9jpAvW", 192, "R&B", "Smooth"),
+            SeedTrack("Marilag", "Dionela", "69165172", "NvGQZpN", 199, "R&B", "Groovy"),
+            SeedTrack("Raining in Manila", "Lola Amour", "12450156", "pRraNWG", 336, "Rock", "Feel Good"),
+            SeedTrack("Malaya", "Moira Dela Torre", "6248262", "abPpq5w", 270, "Chill", "Emotional")
+        )
+
+        private val GLOBAL_SEED_TRACKS = listOf(
+            SeedTrack("Die With A Smile", "Lady Gaga, Bruno Mars", "429675", "ZbZ4zZa", 249, "Pop", "Romantic"),
+            SeedTrack("Starboy", "The Weeknd, Daft Punk", "4050205", "ZPKqbAJ", 273, "R&B", "Hype"),
+            SeedTrack("Birds of a Feather", "Billie Eilish", "9635624", "aW6rqjE", 230, "Pop", "Dreamy"),
+            SeedTrack("Cruel Summer", "Taylor Swift", "12246", "2lp1bg1", 179, "Pop", "Upbeat"),
+            SeedTrack("Not Like Us", "Kendrick Lamar", "525046", "Oo1xMEQ", 273, "Hip-Hop", "Hype"),
+            SeedTrack("Drivers License", "Olivia Rodrigo", "11152580", "d0pMY5P", 247, "Pop", "Emotional"),
+            SeedTrack("Call Out My Name", "The Weeknd", "4050205", "KdmbB", 227, "R&B", "Emotional"),
+            SeedTrack("like JENNIE", "JENNIE", "1228100", "mw9mwr", 190, "K-Pop", "Hype"),
+            SeedTrack("lovely", "Billie Eilish, Khalid", "9635624", "NvQlZ", 200, "Pop", "Emotional"),
+            SeedTrack("Blank Space", "Taylor Swift", "12246", "KVBWy", 272, "Pop", "Upbeat"),
+            SeedTrack("The Hills", "The Weeknd", "4050205", "4aWNr", 265, "R&B", "Moody"),
+            SeedTrack("Fix You", "Coldplay", "892", "KbjZRxz", 296, "Rock", "Emotional"),
+            SeedTrack("Perfect", "Ed Sheeran", "384236", "8p9MqP", 260, "Pop", "Romantic"),
+            SeedTrack("NASA", "Ariana Grande", "1562681", "ePO7X", 245, "Pop", "Upbeat"),
+            SeedTrack("All The Stars", "Kendrick Lamar, SZA", "525046", "BZdx9dx", 235, "Hip-Hop", "Dramatic"),
+            SeedTrack("LUNCH", "Billie Eilish", "9635624", "KddRRvB", 179, "Pop", "Upbeat"),
+            SeedTrack("Often", "The Weeknd", "4050205", "Mp8PJwV", 250, "R&B", "Moody"),
+            SeedTrack("On My Way", "Alan Walker, Sabrina Carpenter", "1176900", "WYrNGp9", 216, "Pop", "Upbeat"),
+            SeedTrack("I Feel It Coming", "The Weeknd, Daft Punk", "4050205", "1VmZyaz", 265, "R&B", "Groovy"),
+            SeedTrack("HUMBLE.", "Kendrick Lamar", "525046", "qRmmZ0P", 185, "Hip-Hop", "Hype"),
+            SeedTrack("Viva La Vida", "Coldplay", "892", "Z4bXj9v", 242, "Rock", "Upbeat"),
+            SeedTrack("Shake It Off", "Taylor Swift", "12246", "aW1JMYE", 221, "Pop", "Sunny"),
+            SeedTrack("Wicked Games", "The Weeknd", "4050205", "kbmwoN", 331, "R&B", "Night Drive"),
+            SeedTrack("goosebumps", "Travis Scott, Kendrick Lamar", "4495513", "zE37P", 250, "Hip-Hop", "Night Drive"),
+            SeedTrack("Espresso", "Sabrina Carpenter", "1176900", "79kjd39", 160, "Pop", "Sunny"),
+            SeedTrack("We Can't Be Friends", "Ariana Grande", "1562681", "oE44v95", 297, "Pop", "Emotional"),
+            SeedTrack("Snooze", "SZA", "1193881", "1Ej98a5", 152, "R&B", "Chill"),
+            SeedTrack("Kill Bill", "SZA", "1193881", "35M6A98", 149, "R&B", "Moody"),
+            SeedTrack("Vampire", "Olivia Rodrigo", "11152580", "m7o6KJj", 208, "Pop", "Dramatic")
+        )
+
+        private val ALL_SEED_TRACKS = PH_SEED_TRACKS + GLOBAL_SEED_TRACKS
 
         private val CURATED_PH_ARTISTS = listOf(
             CuratedArtistSeed("60687062", "Cup of Joe", "https://cdn-images.dzcdn.net/images/artist/72899d9b602142ed374df10a44e446c9/500x500-000000-80-0-0.jpg", 5537L, "OPM • Baguio"),
@@ -989,42 +1851,58 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             CuratedArtistSeed("75491", "Lady Gaga", "https://cdn-images.dzcdn.net/images/artist/7565262f7661b0d762621a8d69ba6f49/500x500-000000-80-0-0.jpg", 9373994L, "Pop"),
             CuratedArtistSeed("1228100", "JENNIE", "https://cdn-images.dzcdn.net/images/artist/944fde7e413c745dcb3534c9d057bcf1/500x500-000000-80-0-0.jpg", 656558L, "K-Pop"),
             CuratedArtistSeed("525046", "Kendrick Lamar", "https://cdn-images.dzcdn.net/images/artist/be0a7c550567f4af0ed202d7235b74d6/500x500-000000-80-0-0.jpg", 6211279L, "Hip-Hop"),
-            CuratedArtistSeed("13817211", "Tate McRae", "https://cdn-images.dzcdn.net/images/artist/b12c2090606779c0ba39eac6e3d2708e/500x500-000000-80-0-0.jpg", 627797L, "Pop")
+            CuratedArtistSeed("13817211", "Tate McRae", "https://cdn-images.dzcdn.net/images/artist/b12c2090606779c0ba39eac6e3d2708e/500x500-000000-80-0-0.jpg", 627797L, "Pop"),
+            CuratedArtistSeed("892", "Coldplay", "https://cdn-images.dzcdn.net/images/artist/3087954bca22f306324912e5ac8375c3/500x500-000000-80-0-0.jpg", 18476242L, "Pop-Rock"),
+            CuratedArtistSeed("384236", "Ed Sheeran", "https://cdn-images.dzcdn.net/images/artist/d6bb84390641d8ae9118228d9544e53d/500x500-000000-80-0-0.jpg", 20980362L, "Pop & Acoustic")
         )
+
+        private val CURATED_ARTIST_NAME_BY_ID: Map<String, String> =
+            (CURATED_PH_ARTISTS + CURATED_GLOBAL_ARTISTS).associate { it.id to it.name } +
+                mapOf(
+                    "1193881" to "SZA",
+                    "4495513" to "Travis Scott"
+                )
+
+        private val ARTIST_PORTRAIT_BY_ID: Map<String, String> =
+            (CURATED_PH_ARTISTS + CURATED_GLOBAL_ARTISTS).associate { it.id to it.avatarUrl } +
+                mapOf(
+                    "1193881" to "https://cdn-images.dzcdn.net/images/artist/88101c1614c17a7a42f01d7dc5e0d4aa/500x500-000000-80-0-0.jpg",
+                    "4495513" to "https://cdn-images.dzcdn.net/images/artist/8d8316146026d7e6ce377e314536df62/500x500-000000-80-0-0.jpg"
+                )
 
         private val CURATED_PLAYLISTS = listOf(
             CuratedPlaylistSeed(
                 rawId = PL_TOP_HITS_PH_2026,
                 name = "Top Hits Philippines 2026",
-                description = "Hottest tracks trending across the Philippines.",
+                description = "Hottest full-length tracks trending across the Philippines.",
                 artworkUrl = "https://cdn-images.dzcdn.net/images/cover/f4c02f9d1ca510997e29370ee644eb96-ea05a09f71c650836e812c579134a34e-b755e304f6639c3a231f9f67832850a2-eb54a3a72b036ca5f45d3358eb40181b/500x500-000000-80-0-0.jpg",
                 authorName = "Philippines Charts"
             ),
             CuratedPlaylistSeed(
                 rawId = PL_OPM_VIRAL_HITS,
                 name = "OPM Viral & Top Hits",
-                description = "Essential OPM, P-Pop, and viral Filipino favorites.",
+                description = "Essential full-length OPM, P-Pop, and viral Filipino favorites.",
                 artworkUrl = "https://cdn-images.dzcdn.net/images/cover/a9ac1c2b00fc5cb5970892e2b460bcb8-eddde5230b09c97f5e222c2fa975d421-8e41af01b219dcbdd33a4244701ed2b3-579fb6c0f175d98e767ac94bce880348/500x500-000000-80-0-0.jpg",
                 authorName = "OPM Select"
             ),
             CuratedPlaylistSeed(
                 rawId = PL_DEEZER_TOP_PH,
-                name = "Deezer Top Philippines",
-                description = "Daily top streamed chart in the Philippines.",
+                name = "Philippines Daily Top",
+                description = "Daily top streamed full-length hits in the Philippines.",
                 artworkUrl = "https://cdn-images.dzcdn.net/images/playlist/2d89a884d5c418fb217f461099f57095/500x500-000000-80-0-0.jpg",
-                authorName = "Deezer Charts"
+                authorName = "PH Charts"
             ),
             CuratedPlaylistSeed(
                 rawId = PL_GLOBAL_TOP_50,
                 name = "Global Top 50",
-                description = "Biggest international tracks right now.",
+                description = "Biggest international full-length tracks right now.",
                 artworkUrl = "https://cdn-images.dzcdn.net/images/playlist/0b92c2f9e94a1a3650f0de769c4fc07c/500x500-000000-80-0-0.jpg",
-                authorName = "Deezer Charts"
+                authorName = "Global Charts"
             ),
             CuratedPlaylistSeed(
                 rawId = PL_THROWBACK_OPM_2000S,
                 name = "Throwback OPM 2000s",
-                description = "Classic Pinoy bands and nostalgic OPM anthems.",
+                description = "Classic Pinoy bands and nostalgic full-length OPM anthems.",
                 artworkUrl = "https://cdn-images.dzcdn.net/images/cover/31dad1e3d13066d992376127114fb9d3-fe61fff7300ef02ce19d766c7e58ad26-c93c039515c9f48057d8472adc7b982f-db75d15f92b2a98153fa0205a2f99ec3/500x500-000000-80-0-0.jpg",
                 authorName = "OPM Classics"
             )

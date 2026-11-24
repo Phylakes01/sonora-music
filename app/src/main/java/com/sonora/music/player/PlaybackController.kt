@@ -35,8 +35,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -168,6 +171,14 @@ object QueueEngine {
         val expSec = match.groupValues.getOrNull(1)?.toLongOrNull() ?: return true
         return expSec > nowEpochSeconds + 60L
     }
+
+    fun isThirtySecondPreviewUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lower = url.lowercase()
+        return lower.contains("dzcdn.net") ||
+            lower.contains("audio-ssl.itunes.apple.com") ||
+            lower.contains("itunes.apple.com")
+    }
 }
 
 class PlaybackController(
@@ -182,6 +193,9 @@ class PlaybackController(
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
+
+    private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
 
     private val _activeAudioSessionId = MutableStateFlow(0)
     val activeAudioSessionId: StateFlow<Int> = _activeAudioSessionId.asStateFlow()
@@ -211,6 +225,7 @@ class PlaybackController(
     private val retriedStreamTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTracks = ConcurrentHashMap<String, Track>()
+    private val unplayableTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     private var trackedTrack: Track? = null
     private var accumulatedListenMs: Long = 0L
@@ -270,13 +285,17 @@ class PlaybackController(
                 setPlayerVolume(1f)
             }
 
-            _playbackState.update { it.copy(errorMessage = null) }
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                _playbackState.update { it.copy(errorMessage = null) }
+            }
             syncPlaybackStateFromPlayer()
 
             if (nextTrack != null && newIdx in currentQueue.indices) {
-                val cachedUpgrade = if (isRemoteResolvableTrack(nextTrack) && isPreviewHostUrl(nextTrack.streamUrl)) {
+                val cachedUpgrade = if (!hasOfflineOrLocalFile(nextTrack) &&
+                    (nextTrack.streamUrl.isBlank() || isThirtySecondPreviewUrl(nextTrack.streamUrl) || isRemoteResolvableTrack(nextTrack))
+                ) {
                     resolvedTracks[nextTrack.id]?.takeIf {
-                        it.streamUrl.startsWith("http", ignoreCase = true) && it.streamUrl != nextTrack.streamUrl
+                        isPlayableFullStreamUrl(it.streamUrl) && it.streamUrl != nextTrack.streamUrl
                     }
                 } else {
                     null
@@ -294,7 +313,12 @@ class PlaybackController(
                             controller.play()
                         }
                     }
-                } else if (needsTransitionResolution(nextTrack)) {
+                } else if (needsTransitionResolution(nextTrack) || !hasPlayableMedia(nextTrack)) {
+                    if (!hasPlayableMedia(nextTrack) && controller != null) {
+                        controller.pause()
+                        isResolvingActiveTrack = true
+                        _playbackState.update { it.copy(isPlaying = false, isBuffering = true) }
+                    }
                     resolveAndUpdateTransitionTrack(newIdx, nextTrack, queueGeneration)
                 }
 
@@ -327,7 +351,7 @@ class PlaybackController(
             val failedTrack = currentQueue.getOrNull(failedIndex)
             if (controller != null &&
                 failedTrack != null &&
-                isRemoteResolvableTrack(failedTrack) &&
+                !hasOfflineOrLocalFile(failedTrack) &&
                 retriedStreamTrackIds.add(failedTrack.id)
             ) {
                 _playbackState.update { it.copy(isBuffering = true, errorMessage = null) }
@@ -335,11 +359,17 @@ class PlaybackController(
                 return
             }
 
+            val msg = if (failedTrack != null && !hasPlayableMedia(failedTrack)) {
+                "Full song stream unavailable for ${failedTrack.title}"
+            } else {
+                error.localizedMessage ?: "Playback failed for this stream"
+            }
+            _errorEvents.tryEmit(msg)
             _playbackState.update {
                 it.copy(
                     isPlaying = false,
                     isBuffering = false,
-                    errorMessage = error.localizedMessage ?: "Playback failed for this stream"
+                    errorMessage = msg
                 )
             }
         }
@@ -433,6 +463,7 @@ class PlaybackController(
         preResolveJob?.cancel()
         transitionResolveJob?.cancel()
         retriedStreamTrackIds.clear()
+        unplayableTrackIds.clear()
 
         val clampedStart = startIndex.coerceIn(0, tracks.lastIndex)
         val initialQueue = tracks.map(::applyCachedResolution)
@@ -485,31 +516,19 @@ class PlaybackController(
     private fun applyCurrentQueueToController(controller: MediaController) {
         val generation = queueGeneration
         val safeIndex = currentIndex.coerceIn(0, (currentQueue.size - 1).coerceAtLeast(0))
-        val activeTrack = currentQueue.getOrNull(safeIndex)
+        val activeTrack = currentQueue.getOrNull(safeIndex) ?: return
 
-        if (activeTrack != null && needsTrackResolution(activeTrack)) {
+        if (needsTrackResolution(activeTrack)) {
             isResolvingActiveTrack = true
             playResolveJob?.cancel()
             playResolveJob = scope.launch {
-                val resolvedTrack = resolveTrackWithCache(activeTrack)
+                val effectiveTrack = resolveTrackWithCache(activeTrack)
                 if (isReleased || generation != queueGeneration) return@launch
                 if (currentQueue.getOrNull(safeIndex)?.id != activeTrack.id) return@launch
 
                 isResolvingActiveTrack = false
-                val effectiveTrack = if (resolvedTrack.streamUrl.isNotBlank()) {
-                    resolvedTrack
-                } else {
-                    activeTrack
-                }
-
-                if (effectiveTrack.streamUrl.isBlank()) {
-                    _playbackState.update {
-                        it.copy(
-                            isPlaying = false,
-                            isBuffering = false,
-                            errorMessage = "Stream unavailable for ${activeTrack.title}"
-                        )
-                    }
+                if (!hasPlayableMedia(effectiveTrack)) {
+                    handleUnplayableTrack(controller, safeIndex, activeTrack, generation)
                     return@launch
                 }
 
@@ -521,8 +540,53 @@ class PlaybackController(
         }
 
         isResolvingActiveTrack = false
+        if (!hasPlayableMedia(activeTrack)) {
+            handleUnplayableTrack(controller, safeIndex, activeTrack, generation)
+            return
+        }
         startControllerQueue(controller, safeIndex)
         launchPreResolveNext(controller, safeIndex, generation)
+    }
+
+    private fun handleUnplayableTrack(
+        controller: MediaController,
+        index: Int,
+        track: Track,
+        generation: Long
+    ) {
+        if (isReleased || generation != queueGeneration) return
+        val errorMsg = "Full song stream unavailable for ${track.title}"
+        unplayableTrackIds.add(track.id)
+        _errorEvents.tryEmit(errorMsg)
+
+        val nextCandidateIdx = ((index + 1)..currentQueue.lastIndex)
+            .firstOrNull { currentQueue[it].id !in unplayableTrackIds }
+        if (nextCandidateIdx != null) {
+            val nextTrack = currentQueue[nextCandidateIdx]
+            currentIndex = nextCandidateIdx
+            resetListenTrackerFor(nextTrack, isPlayingNow = false)
+            _playbackState.update {
+                it.copy(
+                    currentTrack = nextTrack,
+                    currentIndex = nextCandidateIdx,
+                    positionMs = 0L,
+                    durationMs = if (nextTrack.isLive) 0L else nextTrack.durationSec * 1000L,
+                    isPlaying = false,
+                    isBuffering = true,
+                    errorMessage = errorMsg
+                )
+            }
+            applyCurrentQueueToController(controller)
+        } else {
+            isResolvingActiveTrack = false
+            _playbackState.update {
+                it.copy(
+                    isPlaying = false,
+                    isBuffering = false,
+                    errorMessage = errorMsg
+                )
+            }
+        }
     }
 
     private fun startControllerQueue(controller: MediaController, safeIndex: Int) {
@@ -563,7 +627,6 @@ class PlaybackController(
                 val resolved = resolveTrackWithCache(targetTrack)
                 if (!isActive || isReleased || generation != queueGeneration) return@launch
 
-                val effective = if (resolved.streamUrl.isNotBlank()) resolved else targetTrack
                 val actualIdx = if (currentQueue.getOrNull(expectedIdx)?.id == targetTrack.id) {
                     expectedIdx
                 } else {
@@ -572,7 +635,7 @@ class PlaybackController(
                 if (actualIdx !in currentQueue.indices) continue
 
                 val previousTrack = currentQueue[actualIdx]
-                val updatedTrack = updateResolvedTrackInQueues(effective)
+                val updatedTrack = updateResolvedTrackInQueues(resolved)
 
                 val didUpgradeOrChange = updatedTrack.streamUrl != previousTrack.streamUrl ||
                     updatedTrack.isPreviewOnly != previousTrack.isPreviewOnly ||
@@ -585,7 +648,7 @@ class PlaybackController(
                     val isCurrentlyPlayingThis = controller.currentMediaItemIndex == actualIdx
                     if (!isCurrentlyPlayingThis) {
                         controller.replaceMediaItem(actualIdx, buildMediaItem(updatedTrack))
-                    } else if (updatedTrack.streamUrl != previousTrack.streamUrl) {
+                    } else if (hasPlayableMedia(updatedTrack) && updatedTrack.streamUrl != previousTrack.streamUrl) {
                         transitionResolveJob?.cancel()
                         controller.replaceMediaItem(actualIdx, buildMediaItem(updatedTrack))
                         controller.seekTo(actualIdx, 0L)
@@ -604,12 +667,23 @@ class PlaybackController(
             if (isReleased || generation != queueGeneration) return@launch
             if (currentQueue.getOrNull(index)?.id != track.id) return@launch
 
+            isResolvingActiveTrack = false
             val updatedTrack = updateResolvedTrackInQueues(resolved)
-            val upgradedStream = updatedTrack.streamUrl.startsWith("http", ignoreCase = true) &&
-                updatedTrack.streamUrl != track.streamUrl
-            if (!upgradedStream) return@launch
-
             val controller = mediaController ?: return@launch
+
+            if (!hasPlayableMedia(updatedTrack)) {
+                if (controller.currentMediaItemIndex == index) {
+                    handleUnplayableTrack(controller, index, track, generation)
+                }
+                return@launch
+            }
+
+            val upgradedStream = updatedTrack.streamUrl != track.streamUrl || !hasPlayableMedia(track)
+            if (!upgradedStream) {
+                syncPlaybackStateFromPlayer()
+                return@launch
+            }
+
             if (index < controller.mediaItemCount &&
                 controller.getMediaItemAt(index).mediaId == track.id
             ) {
@@ -641,7 +715,7 @@ class PlaybackController(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
-                    failedTrack
+                    failedTrack.copy(streamUrl = "")
                 }
             }
             if (isReleased || generation != queueGeneration) return@launch
@@ -651,14 +725,13 @@ class PlaybackController(
             }
 
             isResolvingActiveTrack = false
-            resolvedTrackIds.add(failedTrack.id)
-            if (resolved.streamUrl.startsWith("http", ignoreCase = true)) {
+            val validStream = isPlayableFullStreamUrl(resolved.streamUrl)
+            if (validStream) {
+                resolvedTrackIds.add(failedTrack.id)
                 resolvedTracks[failedTrack.id] = resolved
             }
 
-            if (resolved.streamUrl.startsWith("http", ignoreCase = true) &&
-                resolved.streamUrl != failedTrack.streamUrl
-            ) {
+            if (validStream && resolved.streamUrl != failedTrack.streamUrl) {
                 val updatedTrack = updateResolvedTrackInQueues(resolved)
                 if (failedIndex < controller.mediaItemCount &&
                     controller.getMediaItemAt(failedIndex).mediaId == failedTrack.id
@@ -671,11 +744,18 @@ class PlaybackController(
                 }
             }
 
+            if (!validStream) {
+                handleUnplayableTrack(controller, failedIndex, failedTrack, generation)
+                return@launch
+            }
+
+            val msg = error.localizedMessage ?: "Playback failed for this stream"
+            _errorEvents.tryEmit(msg)
             _playbackState.update {
                 it.copy(
                     isPlaying = false,
                     isBuffering = false,
-                    errorMessage = error.localizedMessage ?: "Playback failed for this stream"
+                    errorMessage = msg
                 )
             }
         }
@@ -684,8 +764,8 @@ class PlaybackController(
     private suspend fun resolveTrackWithCache(track: Track): Track {
         val cached = resolvedTracks[track.id]
         if (cached != null &&
-            cached.streamUrl.startsWith("http", ignoreCase = true) &&
-            (!isPreviewHostUrl(cached.streamUrl) || QueueEngine.isStreamUrlFresh(cached.streamUrl))
+            isPlayableFullStreamUrl(cached.streamUrl) &&
+            QueueEngine.isStreamUrlFresh(cached.streamUrl)
         ) {
             resolvedTrackIds.add(track.id)
             return mergeResolvedTrack(track, cached)
@@ -697,29 +777,36 @@ class PlaybackController(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
-                track
+                track.copy(streamUrl = if (isThirtySecondPreviewUrl(track.streamUrl)) "" else track.streamUrl)
             }
         }
-        resolvedTrackIds.add(track.id)
-        if (resolved.streamUrl.startsWith("http", ignoreCase = true)) {
+
+        if (isPlayableFullStreamUrl(resolved.streamUrl)) {
+            resolvedTrackIds.add(track.id)
             resolvedTracks[track.id] = resolved
+            return mergeResolvedTrack(track, resolved)
         }
-        return mergeResolvedTrack(track, resolved)
+
+        return mergeResolvedTrack(track, resolved.copy(streamUrl = "", isPreviewOnly = false))
     }
 
     private fun applyCachedResolution(track: Track): Track {
-        if (!isRemoteResolvableTrack(track)) return track
+        if (hasOfflineOrLocalFile(track)) return track
         val cached = resolvedTracks[track.id] ?: return track
-        if (!cached.streamUrl.startsWith("http", ignoreCase = true)) return track
-        if (isPreviewHostUrl(cached.streamUrl) && !QueueEngine.isStreamUrlFresh(cached.streamUrl)) return track
+        if (!isPlayableFullStreamUrl(cached.streamUrl)) return track
+        if (!QueueEngine.isStreamUrlFresh(cached.streamUrl)) return track
         return mergeResolvedTrack(track, cached)
     }
 
     private fun mergeResolvedTrack(original: Track, resolved: Track): Track {
+        val resolvedStream = resolved.streamUrl.takeIf { isPlayableFullStreamUrl(it) }
+        val originalStream = original.streamUrl.takeIf { isPlayableFullStreamUrl(it) }
+        val effectiveStream = resolvedStream ?: originalStream.orEmpty()
         return original.copy(
-            streamUrl = resolved.streamUrl.ifBlank { original.streamUrl },
+            streamUrl = effectiveStream,
+            source = if (resolvedStream != null) resolved.source else original.source,
             durationSec = maxOf(original.durationSec, resolved.durationSec),
-            isPreviewOnly = resolved.isPreviewOnly,
+            isPreviewOnly = if (effectiveStream.isNotBlank()) false else resolved.isPreviewOnly,
             album = original.album.ifBlank { resolved.album },
             artistId = original.artistId.ifBlank { resolved.artistId },
             artworkUrl = original.artworkUrl ?: resolved.artworkUrl,
@@ -727,30 +814,48 @@ class PlaybackController(
         )
     }
 
-    private fun isRemoteResolvableTrack(track: Track): Boolean {
-        return (track.source == TrackSource.DEEZER || track.source == TrackSource.ITUNES) &&
-            downloadManager.getOfflineFile(track.id) == null &&
-            track.localUri.isNullOrBlank()
+    private fun hasOfflineOrLocalFile(track: Track): Boolean {
+        return downloadManager.getOfflineFile(track.id) != null || !track.localUri.isNullOrBlank()
     }
 
-    private fun isPreviewHostUrl(url: String): Boolean {
-        if (url.isBlank()) return true
-        val lower = url.lowercase()
-        return lower.contains("dzcdn.net") || lower.contains("itunes.apple.com")
+    private fun isPlayableFullStreamUrl(url: String): Boolean {
+        return url.isNotBlank() && !isThirtySecondPreviewUrl(url)
+    }
+
+    private fun hasPlayableMedia(track: Track): Boolean {
+        return hasOfflineOrLocalFile(track) || isPlayableFullStreamUrl(track.streamUrl)
+    }
+
+    private fun isRemoteResolvableTrack(track: Track): Boolean {
+        return !hasOfflineOrLocalFile(track) &&
+            !track.isLive &&
+            (track.source == TrackSource.DEEZER ||
+                track.source == TrackSource.ITUNES ||
+                track.streamUrl.isBlank() ||
+                isThirtySecondPreviewUrl(track.streamUrl))
     }
 
     private fun needsTrackResolution(track: Track): Boolean {
-        if (!isRemoteResolvableTrack(track)) return false
-        if (!resolvedTrackIds.contains(track.id)) return true
+        if (hasOfflineOrLocalFile(track)) return false
+        if (track.isLive) return track.streamUrl.isBlank()
+        if (track.streamUrl.isBlank() || isThirtySecondPreviewUrl(track.streamUrl) || track.isPreviewOnly) {
+            return true
+        }
         if (!QueueEngine.isStreamUrlFresh(track.streamUrl)) return true
-        val cached = resolvedTracks[track.id] ?: return isPreviewHostUrl(track.streamUrl)
-        return cached.streamUrl != track.streamUrl || cached.isPreviewOnly != track.isPreviewOnly
+        if ((track.source == TrackSource.DEEZER || track.source == TrackSource.ITUNES) &&
+            !resolvedTrackIds.contains(track.id)
+        ) {
+            return true
+        }
+        return false
     }
 
     private fun needsTransitionResolution(track: Track): Boolean {
-        return isRemoteResolvableTrack(track) &&
-            isPreviewHostUrl(track.streamUrl) &&
-            !resolvedTrackIds.contains(track.id)
+        if (hasOfflineOrLocalFile(track) || track.isLive) return false
+        return track.streamUrl.isBlank() ||
+            isThirtySecondPreviewUrl(track.streamUrl) ||
+            ((track.source == TrackSource.DEEZER || track.source == TrackSource.ITUNES) &&
+                !resolvedTrackIds.contains(track.id))
     }
 
     private fun updateResolvedTrackInQueues(resolvedTrack: Track): Track {
@@ -1426,7 +1531,7 @@ class PlaybackController(
         val resolvedUri: Uri = when {
             offlineFile != null && offlineFile.length() > 0L -> Uri.fromFile(offlineFile)
             !track.localUri.isNullOrBlank() -> Uri.parse(track.localUri)
-            track.streamUrl.isNotBlank() -> Uri.parse(track.streamUrl)
+            isPlayableFullStreamUrl(track.streamUrl) -> Uri.parse(track.streamUrl)
             else -> Uri.EMPTY
         }
 
@@ -1500,8 +1605,11 @@ class PlaybackController(
         }
     }
 
-    private companion object {
-        const val LISTEN_REPORT_THRESHOLD_MS = 15_000L
-        const val SKIP_REPORT_MINIMUM_MS = 3_000L
+    companion object {
+        private const val LISTEN_REPORT_THRESHOLD_MS = 15_000L
+        private const val SKIP_REPORT_MINIMUM_MS = 3_000L
+
+        fun isThirtySecondPreviewUrl(url: String): Boolean =
+            QueueEngine.isThirtySecondPreviewUrl(url)
     }
 }

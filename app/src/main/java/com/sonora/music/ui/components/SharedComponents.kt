@@ -99,7 +99,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -185,6 +189,107 @@ fun rememberSonoraShimmerBrush(): Brush {
         start = Offset(translate, translate * 0.35f),
         end = Offset(translate + 340f, translate * 0.35f + 220f)
     )
+}
+
+@Composable
+fun SonoraBrandLogo(
+    size: Dp = 28.dp,
+    modifier: Modifier = Modifier
+) {
+    val echoPathLeft = remember { Path() }
+    val echoPathRight = remember { Path() }
+    val ribbonPath = remember { Path() }
+    val spinePath = remember { Path() }
+
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val minDim = minOf(w, h)
+        val borderStroke = 1.dp.toPx().coerceAtMost(minDim * 0.08f)
+        val inset = borderStroke / 2f
+        val cornerRadius = minDim * 0.27f
+
+        // Deep #0D1114 rounded-square backing + subtle 1.dp #24282E hairline
+        drawRoundRect(
+            color = Color(0xFF0D1114),
+            topLeft = Offset(inset, inset),
+            size = Size(w - borderStroke, h - borderStroke),
+            cornerRadius = CornerRadius(cornerRadius, cornerRadius)
+        )
+        drawRoundRect(
+            color = Color(0xFF24282E),
+            topLeft = Offset(inset, inset),
+            size = Size(w - borderStroke, h - borderStroke),
+            cornerRadius = CornerRadius(cornerRadius, cornerRadius),
+            style = Stroke(width = borderStroke)
+        )
+
+        // Map ic_launcher_foreground.xml's inner 76x76 safe zone (16..92) onto Canvas bounds
+        fun px(v: Float): Float = ((v - 16f) / 76f) * w
+        fun py(v: Float): Float = ((v - 16f) / 76f) * h
+        val scale = minDim / 76f
+
+        // Symmetrical whisper echo arcs
+        echoPathLeft.reset()
+        echoPathLeft.moveTo(px(34f), py(35f))
+        echoPathLeft.cubicTo(px(31f), py(42f), px(32f), py(48f), px(36f), py(53f))
+        drawPath(
+            path = echoPathLeft,
+            color = Color(0xFF24E56F).copy(alpha = 0.45f),
+            style = Stroke(width = 3.2f * scale, cap = StrokeCap.Round)
+        )
+
+        echoPathRight.reset()
+        echoPathRight.moveTo(px(74f), py(73f))
+        echoPathRight.cubicTo(px(77f), py(66f), px(76f), py(60f), px(72f), py(55f))
+        drawPath(
+            path = echoPathRight,
+            color = Color(0xFF24E56F).copy(alpha = 0.45f),
+            style = Stroke(width = 3.2f * scale, cap = StrokeCap.Round)
+        )
+
+        // Primary sculpted Sonora "S" acoustic ribbon
+        ribbonPath.reset()
+        ribbonPath.moveTo(px(66f), py(36f))
+        ribbonPath.cubicTo(px(60f), py(28f), px(43f), py(29f), px(40f), py(40f))
+        ribbonPath.cubicTo(px(38f), py(48f), px(46f), py(52f), px(54f), py(54f))
+        ribbonPath.cubicTo(px(62f), py(56f), px(70f), py(60f), px(68f), py(68f))
+        ribbonPath.cubicTo(px(65f), py(79f), px(48f), py(80f), px(42f), py(72f))
+        drawPath(
+            path = ribbonPath,
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0f to Color(0xFF24E56F),
+                    0.52f to Color(0xFF1DB954),
+                    1f to Color(0xFF128E3E)
+                ),
+                start = Offset(px(38f), py(28f)),
+                end = Offset(px(70f), py(80f))
+            ),
+            style = Stroke(
+                width = 7.8f * scale,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+
+        // Subtle highlight harmonic spine
+        spinePath.reset()
+        spinePath.moveTo(px(64f), py(35f))
+        spinePath.cubicTo(px(59f), py(29f), px(45f), py(30f), px(42f), py(39f))
+        drawPath(
+            path = spinePath,
+            color = Color(0xFFB8FFE0).copy(alpha = 0.30f),
+            style = Stroke(width = 2.0f * scale, cap = StrokeCap.Round)
+        )
+
+        // Central crisp white pulse dot
+        drawCircle(
+            color = Color.White.copy(alpha = 0.94f),
+            radius = 3.2f * scale,
+            center = Offset(px(54f), py(54f))
+        )
+    }
 }
 
 @Composable
@@ -590,10 +695,19 @@ fun TrackRow(
     }
 
     val isDownloaded = downloadState?.status == DownloadStatus.DOWNLOADED
-    val subtitleText = remember(track.id, track.artist, track.isLive, track.source, isDownloaded) {
+    val subtitleText = remember(
+        track.id,
+        track.artist,
+        track.durationSec,
+        track.isLive,
+        track.source,
+        track.genre
+    ) {
         when {
-            track.isLive || track.source == TrackSource.RADIO -> "LIVE • ${track.displayArtist}"
-            isDownloaded -> "Offline • ${track.displayArtist}"
+            track.isLive || track.source == TrackSource.RADIO -> {
+                "LIVE • ${track.genre.ifBlank { track.displayArtist }}"
+            }
+            track.durationSec > 0 -> "${track.displayArtist} • ${track.formattedDuration}"
             else -> track.displayArtist
         }
     }
@@ -624,19 +738,19 @@ fun TrackRow(
             Spacer(modifier = Modifier.width(10.dp))
         }
 
-        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.size(52.dp), contentAlignment = Alignment.Center) {
             SonoraArtwork(
                 artworkUrl = track.artworkUrl,
                 title = track.title,
-                cornerRadius = 4.dp,
+                cornerRadius = 6.dp,
                 modifier = Modifier.fillMaxSize()
             )
             if (isCurrent && index == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color.Black.copy(alpha = 0.55f)),
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Black.copy(alpha = 0.56f)),
                     contentAlignment = Alignment.Center
                 ) {
                     AnimatedPlayingBars(isPlaying = isPlaying, color = EmeraldAccent)
@@ -661,7 +775,7 @@ fun TrackRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                if (downloadState?.status == DownloadStatus.DOWNLOADED) {
+                if (isDownloaded) {
                     Icon(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = "Downloaded",
@@ -678,6 +792,8 @@ fun TrackRow(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.width(4.dp))
 
         if (!track.isLive && track.source != TrackSource.LOCAL) {
             Box(
@@ -774,8 +890,8 @@ fun ShimmerRowPlaceholder() {
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .size(52.dp)
+                .clip(RoundedCornerShape(6.dp))
                 .background(brush)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -875,7 +991,7 @@ fun TrackActionSheet(
                 SonoraArtwork(
                     artworkUrl = track.artworkUrl,
                     title = track.title,
-                    cornerRadius = 4.dp,
+                    cornerRadius = 6.dp,
                     modifier = Modifier.size(52.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
@@ -890,9 +1006,17 @@ fun TrackActionSheet(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = when {
-                            track.isLive || track.source == TrackSource.RADIO -> "LIVE • ${track.displayArtist}"
-                            downloadState?.status == DownloadStatus.DOWNLOADED -> "Offline • ${track.displayArtist}"
-                            track.isPreviewOnly -> "30s Preview • ${track.displayArtist}"
+                            track.isLive || track.source == TrackSource.RADIO -> {
+                                "LIVE • ${track.genre.ifBlank { track.displayArtist }}"
+                            }
+                            downloadState?.status == DownloadStatus.DOWNLOADED -> {
+                                if (track.durationSec > 0) {
+                                    "Offline MP3 • ${track.displayArtist} • ${track.formattedDuration}"
+                                } else {
+                                    "Offline MP3 • ${track.displayArtist}"
+                                }
+                            }
+                            track.durationSec > 0 -> "${track.displayArtist} • ${track.formattedDuration}"
                             else -> track.displayArtist
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -915,7 +1039,7 @@ fun TrackActionSheet(
                 SheetActionItem(
                     icon = Icons.AutoMirrored.Rounded.OpenInNew,
                     label = "Open Full Song",
-                    tint = if (track.isPreviewOnly) EmeraldAccent else TextPrimary,
+                    tint = TextPrimary,
                     onClick = {
                         onOpenFullTrack()
                         onDismiss()
@@ -964,7 +1088,7 @@ fun TrackActionSheet(
                     label = when {
                         isDownloaded -> "Remove Download"
                         isDownloading -> "Downloading (${(downloadState.progress * 100).toInt()}%)"
-                        else -> "Download"
+                        else -> "Download Full MP3"
                     },
                     tint = if (isDownloaded) EmeraldAccent else TextPrimary,
                     onClick = {
@@ -1047,7 +1171,7 @@ fun CreatePlaylistDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             color = ObsidianSurface,
             border = BorderStroke(1.dp, ObsidianStroke),
             modifier = Modifier
@@ -1071,7 +1195,7 @@ fun CreatePlaylistDialog(
                 SonoraArtwork(
                     artworkUrl = null,
                     title = name.ifBlank { "Playlist" },
-                    cornerRadius = 8.dp,
+                    cornerRadius = 12.dp,
                     colorStart = selectedPalette.first,
                     colorEnd = selectedPalette.second,
                     modifier = Modifier.size(96.dp)
@@ -1259,7 +1383,7 @@ fun AddToPlaylistSheet(
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(6.dp))
                             .background(EmeraldAccent),
                         contentAlignment = Alignment.Center
                     ) {
@@ -1319,7 +1443,7 @@ fun AddToPlaylistSheet(
                             SonoraArtwork(
                                 artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
                                 title = playlist.name,
-                                cornerRadius = 4.dp,
+                                cornerRadius = 6.dp,
                                 colorStart = playlist.coverColorStart,
                                 colorEnd = playlist.coverColorEnd,
                                 modifier = Modifier.size(48.dp)
@@ -1380,7 +1504,7 @@ fun ImportExportPlaylistDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(14.dp),
             color = ObsidianSurface,
             border = BorderStroke(1.dp, ObsidianStroke),
             modifier = Modifier

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,17 +54,19 @@ import androidx.compose.ui.unit.sp
 import com.sonora.music.model.LyricsResult
 import com.sonora.music.model.Track
 import com.sonora.music.ui.theme.EmeraldAccent
-import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 
+private val LyricsSheetBg = Color(0xFF161618)
+private val LyricsActiveCardBg = Color(0xFF1F1F24)
+private val LyricsCardBorder = Color(0xFF2B2B32)
+private val LyricsDivider = Color(0xFF26262A)
+
 /**
- * Matte charcoal lyrics sheet with auto-scrolling synced lines, tap-to-seek,
- * plain lyrics fallback, and clean instrumental/unavailable states.
+ * Refined matte #161618 lyrics sheet with auto-scrolling synced lines, tap-to-seek,
+ * crisp dividers, smooth karaoke typography, and plain/instrumental states.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,15 +100,23 @@ fun LyricsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = ObsidianSurface,
+        containerColor = LyricsSheetBg,
         contentColor = TextPrimary,
-        dragHandle = null
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 4.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF34343A))
+            )
+        }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.88f)
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             // Header
             Row(
@@ -120,7 +131,10 @@ fun LyricsSheet(
                     ) {
                         Text(
                             text = track?.title ?: "Lyrics",
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = (-0.3).sp
+                            ),
                             color = TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -135,20 +149,22 @@ fun LyricsSheet(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(Color(0xFF2A2A2A))
+                                    .background(Color(0xFF28282E))
                                     .padding(horizontal = 8.dp, vertical = 2.dp)
                             ) {
                                 Text(
                                     text = modeLabel,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 10.sp
+                                        fontSize = 10.sp,
+                                        letterSpacing = 0.5.sp
                                     ),
                                     color = EmeraldAccent
                                 )
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = track?.displayArtist ?: "",
                         style = MaterialTheme.typography.bodyMedium,
@@ -181,7 +197,17 @@ fun LyricsSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = LyricsDivider, thickness = 1.dp)
+            if (syncedLines.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Tap any line to seek",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
 
             when {
                 isLoading -> {
@@ -207,7 +233,7 @@ fun LyricsSheet(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(top = 20.dp, bottom = 96.dp),
+                        contentPadding = PaddingValues(top = 14.dp, bottom = 96.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         itemsIndexed(syncedLines, key = { index, line -> "${line.timeMs}_$index" }) { index, line ->
@@ -216,8 +242,8 @@ fun LyricsSheet(
                             val textColor by animateColorAsState(
                                 targetValue = when {
                                     isActive -> Color.White
-                                    isPast -> TextSecondary.copy(alpha = 0.58f)
-                                    else -> TextMuted
+                                    isPast -> TextSecondary.copy(alpha = 0.48f)
+                                    else -> TextSecondary.copy(alpha = 0.80f)
                                 },
                                 label = "lyric_line_color"
                             )
@@ -225,19 +251,26 @@ fun LyricsSheet(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (isActive) ObsidianCard else Color.Transparent)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isActive) LyricsActiveCardBg else Color.Transparent)
+                                    .then(
+                                        if (isActive) {
+                                            Modifier.border(1.dp, LyricsCardBorder, RoundedCornerShape(12.dp))
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                                     .clickable {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         onSeekTo(line.timeMs)
                                     }
-                                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
                             ) {
                                 Text(
                                     text = line.text.ifBlank { "♪" },
                                     style = MaterialTheme.typography.headlineSmall.copy(
-                                        fontSize = if (isActive) 21.sp else 18.sp,
-                                        lineHeight = if (isActive) 29.sp else 25.sp,
+                                        fontSize = if (isActive) 22.sp else 18.sp,
+                                        lineHeight = if (isActive) 30.sp else 25.sp,
                                         fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium
                                     ),
                                     color = textColor
@@ -258,7 +291,7 @@ fun LyricsSheet(
                             text = lyrics!!.plainLyrics!!,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = 18.sp,
-                                lineHeight = 29.sp,
+                                lineHeight = 30.sp,
                                 fontWeight = FontWeight.Medium
                             ),
                             color = TextPrimary.copy(alpha = 0.92f)
@@ -276,8 +309,8 @@ fun LyricsSheet(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(ObsidianCard)
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(14.dp))
+                                .background(LyricsActiveCardBg)
+                                .border(1.dp, LyricsCardBorder, RoundedCornerShape(14.dp))
                                 .padding(26.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -286,7 +319,7 @@ fun LyricsSheet(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF2A2A2A)),
+                                    .background(Color(0xFF2A2A30)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(

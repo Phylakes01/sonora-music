@@ -13,6 +13,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -305,7 +306,8 @@ private fun WrappedMinutesSlide(stats: WrappedStats) {
             style = MaterialTheme.typography.displaySmall.copy(
                 fontSize = 64.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = (-1.5).sp
+                letterSpacing = (-1.5).sp,
+                fontFeatureSettings = "tnum"
             ),
             color = EmeraldAccent
         )
@@ -356,8 +358,8 @@ private fun MetricStatTile(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = ObsidianSurface,
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1A1A1D),
         border = BorderStroke(1.dp, ObsidianStroke),
         modifier = modifier
     ) {
@@ -367,7 +369,10 @@ private fun MetricStatTile(
         ) {
             Text(
                 text = value,
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum"
+                ),
                 color = TextPrimary
             )
             Spacer(modifier = Modifier.height(2.dp))
@@ -406,8 +411,8 @@ private fun WrappedTopTracksSlide(items: List<WrappedTopItem>) {
             WrappedEmptySlideCard("Listen to tracks to see your Top 5 songs.")
         } else {
             Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = ObsidianSurface,
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF1A1A1D),
                 border = BorderStroke(1.dp, ObsidianStroke),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -454,8 +459,8 @@ private fun WrappedTopArtistsSlide(items: List<WrappedTopItem>) {
         } else {
             val lead = items.first()
             Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = ObsidianSurface,
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFF1A1A1D),
                 border = BorderStroke(1.dp, ObsidianStroke),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -467,7 +472,9 @@ private fun WrappedTopArtistsSlide(items: List<WrappedTopItem>) {
                         artworkUrl = lead.artworkUrl,
                         title = lead.name,
                         isCircle = true,
-                        modifier = Modifier.size(64.dp)
+                        modifier = Modifier
+                            .size(64.dp)
+                            .border(1.dp, Color(0xFF2B2B30), CircleShape)
                     )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -647,8 +654,8 @@ private fun WrappedPersonaSlide(
         Spacer(modifier = Modifier.height(24.dp))
 
         Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = ObsidianSurface,
+            shape = RoundedCornerShape(12.dp),
+            color = Color(0xFF1A1A1D),
             border = BorderStroke(1.dp, ObsidianStroke),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -661,7 +668,7 @@ private fun WrappedPersonaSlide(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "${stats.totalMinutes}",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = "tnum"),
                         color = TextPrimary
                     )
                     Text("Minutes", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
@@ -678,7 +685,7 @@ private fun WrappedPersonaSlide(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "${stats.totalPlays}",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = "tnum"),
                         color = TextPrimary
                     )
                     Text("Streams", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
@@ -743,8 +750,8 @@ private fun WrappedRankedRow(
             artworkUrl = item.artworkUrl,
             title = item.name,
             isCircle = isCircle,
-            cornerRadius = 4.dp,
-            modifier = Modifier.size(44.dp)
+            cornerRadius = 6.dp,
+            modifier = Modifier.size(46.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -767,7 +774,7 @@ private fun WrappedRankedRow(
         }
         Text(
             text = "${item.playCount}x",
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
             color = TextSecondary
         )
     }
@@ -776,8 +783,8 @@ private fun WrappedRankedRow(
 @Composable
 private fun WrappedEmptySlideCard(message: String) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = ObsidianSurface,
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1A1A1D),
         border = BorderStroke(1.dp, ObsidianStroke),
         modifier = Modifier.fillMaxWidth()
     ) {
