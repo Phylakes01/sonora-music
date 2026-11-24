@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer resonant vinyl ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1ED760"
+        android:strokeWidth="3.5"
+        android:strokeAlpha="0.45"
+        android:pathData="M54,24 A30,30 0 1,1 53.99,24 Z" />
+
+    <!-- Main luminous emerald disc -->
+    <path
+        android:fillColor="#1ED760"
+        android:pathData="M54,30 A24,24 0 1,1 53.99,30 Z" />
+
+    <!-- Deep obsidian inner ring -->
+    <path
+        android:fillColor="#080A0F"
+        android:pathData="M54,36 A18,18 0 1,1 53.99,36 Z" />
+
+    <!-- Kinetic soundwave bars inside the disc -->
+    <path
+        android:fillColor="#1ED760"
+        android:pathData="M42.5,51 L45.5,51 A1.5,1.5 0 0,1 47,52.5 L47,55.5 A1.5,1.5 0 0,1 45.5,57 L42.5,57 A1.5,1.5 0 0,1 41,55.5 L41,52.5 A1.5,1.5 0 0,1 42.5,51 Z" />
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M49.5,44 L52.5,44 A1.5,1.5 0 0,1 54,45.5 L54,62.5 A1.5,1.5 0 0,1 52.5,64 L49.5,64 A1.5,1.5 0 0,1 48,62.5 L48,45.5 A1.5,1.5 0 0,1 49.5,44 Z" />
+    <path
+        android:fillColor="#1ED760"
+        android:pathData="M56.5,40 L59.5,40 A1.5,1.5 0 0,1 61,41.5 L61,66.5 A1.5,1.5 0 0,1 59.5,68 L56.5,68 A1.5,1.5 0 0,1 55,66.5 L55,41.5 A1.5,1.5 0 0,1 56.5,40 Z" />
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M63.5,48 L66.5,48 A1.5,1.5 0 0,1 68,49.5 L68,58.5 A1.5,1.5 0 0,1 66.5,60 L63.5,60 A1.5,1.5 0 0,1 62,58.5 L62,49.5 A1.5,1.5 0 0,1 63.5,48 Z" />
+</vector>
