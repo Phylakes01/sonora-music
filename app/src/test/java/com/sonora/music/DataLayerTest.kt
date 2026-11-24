@@ -1791,7 +1791,7 @@ class DataLayerTest {
 
         // Curated MVs & Packs
         val curated = api.getCuratedMusicVideos()
-        assertEquals(38, curated.size)
+        assertEquals(39, curated.size)
         assertTrue(curated.any { it.artist == "Esremborak" && it.title == "Mahal Magmahal" && it.youtubeVideoId == "S7BKWs2Tirg" })
         assertTrue(curated.any { it.artist == "Esremborak" && it.title == "Tenchu" && it.youtubeVideoId == "IKB_JIXfuDw" })
         assertTrue(curated.any { it.artist == "Mariah Deborah" && it.title == "Na Para Bang" && it.youtubeVideoId == "Y5z_4utl678" })
@@ -1940,5 +1940,19 @@ class DataLayerTest {
             durationSec = 260
         )
         assertNull(resolver.resolveFullTrackOrNull(excludedTrack))
+    }
+
+    @Test
+    fun directYouTubeSearch_findsHongKongByWeekendWithoutManualImport() = runTest {
+        val api = MusicCatalogApi(createCatalogMockClient())
+        val byBoth = api.searchVideos("Hong Kong by Weekend")
+        val byTitle = api.searchVideos("hong kong")
+        val byArtist = api.searchVideos("weekend")
+
+        assertTrue("Search 'Hong Kong by Weekend' should include hX9S94XsySk", byBoth.any { it.youtubeVideoId == "hX9S94XsySk" })
+        assertTrue("Search 'hong kong' should include The Weeknd MV", byTitle.any { it.youtubeVideoId == "hX9S94XsySk" && it.artist == "The Weeknd" })
+        assertTrue("Search 'weekend' should include The Weeknd catalog MVs", byArtist.any { it.artist == "The Weeknd" && it.youtubeVideoId == "hX9S94XsySk" })
+        assertTrue(byBoth.none { RegionalContentFilter.isExcludedTrack(it) })
+        assertTrue(byBoth.none { it.isPreviewOnly })
     }
 }

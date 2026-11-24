@@ -240,6 +240,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     suspend fun importFromYouTube(input: String): YouTubeImportResult =
         youTubeApi.importFromUrlOrQuery(input)
 
+    suspend fun warmYouTubeIndex() = youTubeApi.warmRssSearchIndex()
+
     suspend fun searchVideos(query: String): List<Track> = youTubeApi.searchVideos(query)
 
     suspend fun getGenreTracks(genre: String, limit: Int = 30): List<Track> = withContext(Dispatchers.IO) {
@@ -599,6 +601,11 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         }
         val safeLimit = limit.coerceIn(1, 50)
         val effectiveQuery = expandSearchAlias(trimmed)
+        val audiusQuery = effectiveQuery
+            .replace(Regex("""\s+(?:by|official|mv|music video|lyric video)\s+""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""\s{2,}"""), " ")
+            .trim()
+            .ifBlank { effectiveQuery }
 
         coroutineScope {
             val matchingSeeds = findMatchingCuratedSeeds(effectiveQuery)
@@ -606,7 +613,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                 if (matchingSeeds.isNotEmpty()) fetchAudiusSeedMetadata(matchingSeeds) else emptyMap()
             }
             val audiusSearchDef = async {
-                searchAudiusFullTracks(effectiveQuery, limit = safeLimit.coerceAtLeast(25), defaultGenre = "Music")
+                searchAudiusFullTracks(audiusQuery, limit = safeLimit.coerceAtLeast(25), defaultGenre = "Music")
             }
 
             val seedMeta = seedMetaDef.await()
@@ -1486,14 +1493,18 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     private fun expandSearchAlias(query: String): String {
-        val lower = query.lowercase(Locale.ROOT).trim()
-        return when {
-            lower == "maria deborah" || lower == "maria debora" || lower == "mariadeborah" ->
-                "Mariah Deborah"
-            lower.contains("maria deborah") ->
-                lower.replace("maria deborah", "Mariah Deborah")
-            else -> query
-        }
+        var result = query.trim()
+        result = Regex("""\b(?:the\s+weekend|weekend|weeknd)\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "The Weeknd")
+        result = Regex("""\b(?:maria\s+deborah|maria\s+debora|mariadeborah)\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Mariah Deborah")
+        result = Regex("""\besremborac\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Esremborak")
+        result = Regex("""\bben\s+and\s+ben\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Ben&Ben")
+        result = Regex("""\bcup\s+of\s+jo\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Cup of Joe")
+        return result.replace(Regex("""\s{2,}"""), " ").trim()
     }
 
     private fun matchCuratedSeed(title: String, artist: String): SeedTrack? {
@@ -1525,6 +1536,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         val effective = expandSearchAlias(query)
         val qNorm = normalizeText(effective)
         val qTokens = tokenizeWords(effective)
+            .filterNot { it == "by" || it == "the" || it == "official" || it == "mv" }
+            .ifEmpty { tokenizeWords(effective) }
         if (qNorm.isEmpty()) return emptyList()
 
         return ALL_SEED_TRACKS.filter { seed ->

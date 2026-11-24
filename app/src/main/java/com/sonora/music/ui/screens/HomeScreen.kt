@@ -266,11 +266,6 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        item(key = "youtube_import_pill") {
-                            YouTubeImportActionPill(
-                                onClick = { actions.onOpenImportYouTube() }
-                            )
-                        }
                         items(HomeTopFilters, key = { it }) { filter ->
                             SonoraPillChip(
                                 label = filter,

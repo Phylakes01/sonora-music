@@ -282,6 +282,7 @@ class PlaybackController(
     private var queueGeneration: Long = 0L
     private var isResolvingActiveTrack: Boolean = false
     private var controllerHasCurrentQueue: Boolean = false
+    private var pendingInitialSeekMs: Long = 0L
     private val retriedStreamTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTracks = ConcurrentHashMap<String, Track>()
@@ -295,7 +296,7 @@ class PlaybackController(
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) return
             if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             updateListenTrackerPlaying(isPlaying)
             if (!isPlaying) {
@@ -305,7 +306,7 @@ class PlaybackController(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) return
             if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             if (playbackState == Player.STATE_ENDED) {
                 flushListenTracker(forceIfMinimumMet = true)
@@ -318,7 +319,7 @@ class PlaybackController(
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) return
             val controller = mediaController
             val newIdx = controller?.currentMediaItemIndex ?: -1
             val prevTrack = trackedTrack
@@ -404,7 +405,7 @@ class PlaybackController(
             newPosition: Player.PositionInfo,
             reason: Int
         ) {
-            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) return
             if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             val idx = mediaController?.currentMediaItemIndex ?: -1
             if (idx in currentQueue.indices) {
@@ -414,7 +415,7 @@ class PlaybackController(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            if (!controllerHasCurrentQueue) return
+            if (!controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) return
             setPlayerVolume(1f)
             val controller = mediaController
             val failedIndex = controller?.currentMediaItemIndex?.takeIf { it in currentQueue.indices } ?: currentIndex
@@ -489,9 +490,9 @@ class PlaybackController(
                     if (hasPendingPlayRequest && currentQueue.isNotEmpty()) {
                         hasPendingPlayRequest = false
                         applyCurrentQueueToController(controller)
-                    } else if (currentQueue.isEmpty() && controller.mediaItemCount > 0) {
+                    } else if (currentQueue.isEmpty() && controller.mediaItemCount > 0 && !SonoraPlayerBridge.isYouTubeModeActive) {
                         restoreQueueFromController(controller)
-                    } else {
+                    } else if (!SonoraPlayerBridge.isYouTubeModeActive) {
                         syncPlaybackStateFromPlayer()
                     }
 
@@ -556,6 +557,7 @@ class PlaybackController(
         currentQueue = targetQueue
         currentIndex = targetIndex
         fadeInOnCurrentTrack = false
+        pendingInitialSeekMs = 0L
         val current = currentQueue.getOrNull(currentIndex)
 
         if (current != null && (current.isVideoOnly || startPausedForVideo)) {
@@ -577,6 +579,8 @@ class PlaybackController(
             return
         }
 
+        YouTubePlaybackBridge.clear()
+        SonoraPlayerBridge.activateExoPlayer()
         isResolvingActiveTrack = current != null && needsTrackResolution(current)
         resetListenTrackerFor(current, isPlayingNow = false)
 
@@ -619,13 +623,25 @@ class PlaybackController(
         isResolvingActiveTrack = false
         controllerHasCurrentQueue = false
         hasPendingPlayRequest = false
-        mediaController?.pause()
+        pendingInitialSeekMs = 0L
+        SonoraPlayerBridge.activePlayer?.pause()
         setPlayerVolume(1f)
         currentIndex = index
         resetListenTrackerFor(track, isPlayingNow = false)
         _playbackState.update { state ->
             QueueEngine.computeVideoTransitionState(state, currentQueue, index) ?: state
         }
+        YouTubePlaybackBridge.setActiveVideo(
+            track = track,
+            queue = currentQueue,
+            index = index,
+            initialPlaying = true
+        )
+        SonoraPlayerBridge.activateYouTubePlayer(
+            queue = currentQueue,
+            index = index,
+            isPlaying = true
+        )
         if (invokeCallback) {
             onVideoTrackSelected(track)
         }
@@ -716,8 +732,12 @@ class PlaybackController(
         val items = currentQueue.map(::buildMediaItem)
         if (items.isEmpty()) return
         val clamped = safeIndex.coerceIn(0, items.lastIndex)
+        val initialSeekMs = pendingInitialSeekMs.coerceAtLeast(0L)
+        pendingInitialSeekMs = 0L
+        YouTubePlaybackBridge.clear()
+        SonoraPlayerBridge.activateExoPlayer()
         controllerHasCurrentQueue = true
-        controller.setMediaItems(items, clamped, 0L)
+        controller.setMediaItems(items, clamped, initialSeekMs)
         controller.repeatMode = toMedia3RepeatMode(repeatMode)
         controller.setPlaybackSpeed(audioSettings.playbackSpeed.coerceIn(0.5f, 2.5f))
         setPlayerVolume(1f)
@@ -1031,9 +1051,12 @@ class PlaybackController(
 
     fun pause() {
         hasPendingPlayRequest = false
-        mediaController?.pause()
+        SonoraPlayerBridge.activePlayer?.pause()
+        if (!SonoraPlayerBridge.isYouTubeModeActive) {
+            mediaController?.pause()
+        }
         val current = currentQueue.getOrNull(currentIndex)
-        if (current?.isVideoOnly == true || !controllerHasCurrentQueue) {
+        if (current?.isVideoOnly == true || !controllerHasCurrentQueue || SonoraPlayerBridge.isYouTubeModeActive) {
             _playbackState.update { it.copy(isPlaying = false, isBuffering = false) }
         }
     }
@@ -1044,6 +1067,8 @@ class PlaybackController(
             activateVideoOnlyTrack(currentIndex, current, invokeCallback = true)
             return
         }
+        YouTubePlaybackBridge.clear()
+        SonoraPlayerBridge.activateExoPlayer()
         val controller = mediaController
         if (controller == null) {
             hasPendingPlayRequest = true
@@ -1063,6 +1088,55 @@ class PlaybackController(
         controller.play()
     }
 
+    fun enterYouTubeModeForCurrentTrack() {
+        val current = currentQueue.getOrNull(currentIndex) ?: return
+        if (current.youtubeVideoId.isBlank()) return
+        hasPendingPlayRequest = false
+        SonoraPlayerBridge.activePlayer?.pause()
+        setPlayerVolume(1f)
+        YouTubePlaybackBridge.setActiveVideo(
+            track = current,
+            queue = currentQueue,
+            index = currentIndex,
+            initialPlaying = true
+        )
+        SonoraPlayerBridge.activateYouTubePlayer(
+            queue = currentQueue,
+            index = currentIndex,
+            isPlaying = true
+        )
+        _playbackState.update { it.copy(isPlaying = true, isBuffering = false, errorMessage = null) }
+    }
+
+    fun resumeAudioFromVideoPosition(positionMs: Long) {
+        val current = currentQueue.getOrNull(currentIndex) ?: return
+        if (current.isVideoOnly) return
+        val clamped = positionMs.coerceAtLeast(0L)
+        YouTubePlaybackBridge.clear()
+        SonoraPlayerBridge.activateExoPlayer()
+
+        val controller = mediaController
+        if (controller == null) {
+            pendingInitialSeekMs = clamped
+            hasPendingPlayRequest = true
+            connect()
+            return
+        }
+        if (!controllerHasCurrentQueue) {
+            pendingInitialSeekMs = clamped
+            hasPendingPlayRequest = false
+            applyCurrentQueueToController(controller)
+            return
+        }
+        if (controller.playbackState == Player.STATE_IDLE && currentQueue.isNotEmpty()) {
+            controller.prepare()
+        }
+        if (clamped > 0L) {
+            controller.seekTo(clamped)
+        }
+        controller.play()
+    }
+
     fun skipToQueueIndex(index: Int, startPausedForVideo: Boolean = false) {
         if (index !in currentQueue.indices) return
         queueGeneration++
@@ -1073,6 +1147,7 @@ class PlaybackController(
 
         currentIndex = index
         fadeInOnCurrentTrack = false
+        pendingInitialSeekMs = 0L
         val target = currentQueue[index]
 
         if (target.isVideoOnly || startPausedForVideo) {
@@ -1080,6 +1155,8 @@ class PlaybackController(
             return
         }
 
+        YouTubePlaybackBridge.clear()
+        SonoraPlayerBridge.activateExoPlayer()
         isResolvingActiveTrack = needsTrackResolution(target)
         resetListenTrackerFor(target, isPlayingNow = false)
         _playbackState.update {
@@ -1659,7 +1736,10 @@ class PlaybackController(
 
     private fun syncPlaybackStateFromPlayer() {
         val controller = mediaController ?: return
-        if (!controllerHasCurrentQueue || currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) {
+        if (!controllerHasCurrentQueue ||
+            SonoraPlayerBridge.isYouTubeModeActive ||
+            currentQueue.getOrNull(currentIndex)?.isVideoOnly == true
+        ) {
             return
         }
         if (!isResolvingActiveTrack) {

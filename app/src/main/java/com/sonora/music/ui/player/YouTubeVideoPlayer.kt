@@ -18,6 +18,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +26,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -63,6 +63,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.sonora.music.player.SonoraPlayerBridge
+import com.sonora.music.player.YouTubePlaybackBridge
 import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianStroke
 import com.sonora.music.ui.theme.TextPrimary
@@ -75,9 +77,9 @@ private val VideoSurfaceBg = Color(0xFF101014)
 private val FallbackCardBg = Color(0xFF1A1A22)
 
 /**
- * Embedded official YouTube IFrame Player API surface inside Android WebView.
- * Uses explicit base URL and referrer policy so embedded MVs play cleanly without Error 153,
- * with a clean fallback card when a rights-holder restricts third-party embeds (101/150).
+ * Persistent embedded official YouTube IFrame Player API surface inside Android WebView.
+ * Reports playback progress & state to YouTubePlaybackBridge + Media3 Notification/PiP
+ * and continues playing across Picture-in-Picture & MiniPlayer transitions without re-buffering.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -85,6 +87,9 @@ fun YouTubeVideoPlayer(
     videoId: String,
     title: String,
     artist: String,
+    isInPictureInPicture: Boolean = false,
+    isMiniMode: Boolean = false,
+    onMiniTapExpand: (() -> Unit)? = null,
     onVideoEnded: () -> Unit,
     onFallbackOpenExternal: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -101,18 +106,37 @@ fun YouTubeVideoPlayer(
 
     val currentOnVideoEnded by rememberUpdatedState(onVideoEnded)
     val currentOnFallbackExternal by rememberUpdatedState(onFallbackOpenExternal)
+    val currentInPip by rememberUpdatedState(isInPictureInPicture)
+    val currentOnMiniTap by rememberUpdatedState(onMiniTapExpand)
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     if (safeVideoId.isBlank() || errorCode != null) {
-        YouTubeFallbackCard(
-            title = title,
-            artist = artist,
-            errorCode = errorCode,
-            onOpenExternal = { currentOnFallbackExternal(watchUrl) },
-            modifier = modifier
-        )
+        if (isMiniMode && !isInPictureInPicture) {
+            Box(
+                modifier = modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(FallbackCardBg)
+                    .clickable { currentOnMiniTap?.invoke() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OndemandVideo,
+                    contentDescription = null,
+                    tint = EmeraldAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        } else {
+            YouTubeFallbackCard(
+                title = title,
+                artist = artist,
+                errorCode = errorCode,
+                onOpenExternal = { currentOnFallbackExternal(watchUrl) },
+                modifier = modifier
+            )
+        }
         return
     }
 
@@ -120,11 +144,56 @@ fun YouTubeVideoPlayer(
     var fullscreenDialog by remember { mutableStateOf<Dialog?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
+    DisposableEffect(webViewRef) {
+        val wv = webViewRef
+        if (wv != null) {
+            YouTubePlaybackBridge.onCommandPlayPause = { play ->
+                SonoraPlayerBridge.syncYouTubeState(
+                    isPlaying = play,
+                    positionMs = YouTubePlaybackBridge.positionMs.value,
+                    durationMs = YouTubePlaybackBridge.durationMs.value
+                )
+                mainHandler.post {
+                    runCatching {
+                        if (play) {
+                            wv.onResume()
+                        }
+                        wv.evaluateJavascript("if(window.sonoraSetPlaying){window.sonoraSetPlaying($play);}", null)
+                    }
+                }
+            }
+            YouTubePlaybackBridge.onCommandSeekTo = { posMs ->
+                val sec = (posMs.coerceAtLeast(0L) / 1000.0)
+                mainHandler.post {
+                    runCatching {
+                        wv.evaluateJavascript("if(window.sonoraSeekTo){window.sonoraSeekTo($sec);}", null)
+                    }
+                }
+            }
+        }
+        onDispose {
+            YouTubePlaybackBridge.onCommandPlayPause = null
+            YouTubePlaybackBridge.onCommandSeekTo = null
+        }
+    }
+
     DisposableEffect(lifecycleOwner, webViewRef) {
         val observer = LifecycleEventObserver { _, event ->
+            val wv = webViewRef ?: return@LifecycleEventObserver
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> webViewRef?.onPause()
-                Lifecycle.Event.ON_RESUME -> webViewRef?.onResume()
+                // Keep WebView running during ON_PAUSE so Picture-in-Picture transitions smoothly!
+                Lifecycle.Event.ON_STOP -> {
+                    if (!currentInPip) {
+                        runCatching {
+                            wv.evaluateJavascript("if(window.sonoraSetPlaying){window.sonoraSetPlaying(false);}", null)
+                            wv.onPause()
+                        }
+                    }
+                }
+                Lifecycle.Event.ON_START,
+                Lifecycle.Event.ON_RESUME -> {
+                    runCatching { wv.onResume() }
+                }
                 else -> Unit
             }
         }
@@ -157,9 +226,15 @@ fun YouTubeVideoPlayer(
         }
     }
 
+    val cornerShape = when {
+        isInPictureInPicture -> RoundedCornerShape(0.dp)
+        isMiniMode -> RoundedCornerShape(6.dp)
+        else -> RoundedCornerShape(14.dp)
+    }
+
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(cornerShape)
             .background(VideoSurfaceBg),
         contentAlignment = Alignment.Center
     ) {
@@ -316,10 +391,18 @@ fun YouTubeVideoPlayer(
             ) {
                 CircularProgressIndicator(
                     color = EmeraldAccent,
-                    strokeWidth = 2.5.dp,
-                    modifier = Modifier.size(30.dp)
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(if (isMiniMode) 18.dp else 30.dp)
                 )
             }
+        }
+
+        if (isMiniMode && !isInPictureInPicture) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { currentOnMiniTap?.invoke() }
+            )
         }
     }
 }
@@ -460,9 +543,26 @@ private class SonoraYouTubeBridge(
 
     @JavascriptInterface
     fun onStateChanged(state: Int) {
-        if (state == 0) {
+        val playing = state == 1 || state == 3
+        if (state == 1 || state == 2) {
+            val posMs = YouTubePlaybackBridge.positionMs.value
+            val durMs = YouTubePlaybackBridge.durationMs.value
+            YouTubePlaybackBridge.reportPlayerState(state == 1, posMs, durMs)
+            SonoraPlayerBridge.syncYouTubeState(state == 1, posMs, durMs)
+        } else if (state == 0) {
             mainHandler.post { onEnded() }
         }
+        if (playing) {
+            mainHandler.post { onReady() }
+        }
+    }
+
+    @JavascriptInterface
+    fun onProgressUpdate(playing: Boolean, positionSec: Double, durationSec: Double) {
+        val posMs = (positionSec * 1000.0).toLong().coerceAtLeast(0L)
+        val durMs = (durationSec * 1000.0).toLong().coerceAtLeast(0L)
+        YouTubePlaybackBridge.reportPlayerState(playing, posMs, durMs)
+        SonoraPlayerBridge.syncYouTubeState(playing, posMs, durMs)
     }
 
     @JavascriptInterface
@@ -487,9 +587,10 @@ private fun buildYouTubePlayerHtml(videoId: String): String = """
           background-color: #101014;
           overflow: hidden;
         }
-        #player {
+        #player, iframe {
           width: 100%;
           height: 100%;
+          border: 0;
         }
       </style>
     </head>
@@ -498,6 +599,36 @@ private fun buildYouTubePlayerHtml(videoId: String): String = """
       <script src="https://www.youtube.com/iframe_api" onerror="if(window.$JS_BRIDGE_NAME){window.$JS_BRIDGE_NAME.onPlayerError(-1);}"></script>
       <script>
         var player;
+        var progressTimer = null;
+
+        window.sonoraSetPlaying = function(shouldPlay) {
+          if (!player) return;
+          try {
+            if (shouldPlay) {
+              player.playVideo();
+            } else {
+              player.pauseVideo();
+            }
+          } catch (e) {}
+        };
+
+        window.sonoraSeekTo = function(sec) {
+          if (!player) return;
+          try {
+            player.seekTo(sec, true);
+          } catch (e) {}
+        };
+
+        function emitProgress() {
+          if (!player || !window.$JS_BRIDGE_NAME) return;
+          try {
+            var state = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
+            var pos = typeof player.getCurrentTime === 'function' ? (player.getCurrentTime() || 0) : 0;
+            var dur = typeof player.getDuration === 'function' ? (player.getDuration() || 0) : 0;
+            window.$JS_BRIDGE_NAME.onProgressUpdate(state === 1 || state === 3, pos, dur);
+          } catch (e) {}
+        }
+
         function onYouTubeIframeAPIReady() {
           try {
             player = new YT.Player('player', {
@@ -520,10 +651,13 @@ private fun buildYouTubePlayerHtml(videoId: String): String = """
                     window.$JS_BRIDGE_NAME.onPlayerReady();
                   }
                   try { event.target.playVideo(); } catch (e) {}
+                  if (progressTimer) clearInterval(progressTimer);
+                  progressTimer = setInterval(emitProgress, 800);
                 },
                 onStateChange: function(event) {
                   if (window.$JS_BRIDGE_NAME) {
                     window.$JS_BRIDGE_NAME.onStateChanged(event.data);
+                    emitProgress();
                   }
                 },
                 onError: function(event) {

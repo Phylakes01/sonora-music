@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -61,8 +62,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.sonora.music.SonoraViewModel
 import com.sonora.music.model.AppTab
 import com.sonora.music.model.Artist
@@ -83,6 +88,7 @@ import com.sonora.music.ui.player.FullPlayerSheet
 import com.sonora.music.ui.player.LyricsSheet
 import com.sonora.music.ui.player.MiniPlayer
 import com.sonora.music.ui.player.QueueSheet
+import com.sonora.music.ui.player.YouTubeVideoPlayer
 import com.sonora.music.ui.screens.AiPlaylistSheet
 import com.sonora.music.ui.screens.DetailScreenHost
 import com.sonora.music.ui.screens.HomeScreen
@@ -105,6 +111,7 @@ fun SonoraApp(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val density = LocalDensity.current
     val snackbarHostState = remember { SnackbarHostState() }
 
     var overflowTrack by remember { mutableStateOf<Track?>(null) }
@@ -116,6 +123,8 @@ fun SonoraApp(
     var openGenericImportDialog by remember { mutableStateOf(false) }
     var openJamImportExportDialog by remember { mutableStateOf(false) }
     var addTracksToPlaylistTarget by remember { mutableStateOf<Playlist?>(null) }
+    var fullVideoSlotRect by remember { mutableStateOf<IntRect?>(null) }
+    var miniVideoSlotRect by remember { mutableStateOf<IntRect?>(null) }
 
     LaunchedEffect(uiState.snackbarMessage) {
         val message = uiState.snackbarMessage
@@ -261,21 +270,14 @@ fun SonoraApp(
                                         }
                                         viewModel.openFullPlayer()
                                     },
-                                    onTogglePlayPause = {
-                                        if (currentTrack?.isVideoOnly == true) {
-                                            if (!uiState.isVideoMode) {
-                                                viewModel.onSetVideoMode(true)
-                                            }
-                                            viewModel.openFullPlayer()
-                                        } else {
-                                            viewModel.togglePlayPause()
-                                        }
-                                    },
+                                    onTogglePlayPause = viewModel::togglePlayPause,
                                     onSkipNext = viewModel::skipNext,
                                     onSkipPrev = viewModel::skipPrev,
                                     onToggleLike = {
                                         currentTrack?.let { viewModel.toggleLike(it) }
-                                    }
+                                    },
+                                    isVideoMode = uiState.isVideoMode && currentTrack?.youtubeVideoId?.isNotBlank() == true,
+                                    onMiniVideoSlotPositioned = { rect -> miniVideoSlotRect = rect }
                                 )
                             }
 
@@ -291,23 +293,26 @@ fun SonoraApp(
 
             // Full-Screen Player Overlay
             AnimatedVisibility(
-                visible = uiState.isFullPlayerOpen && uiState.playback.currentTrack != null,
+                visible = uiState.isFullPlayerOpen && uiState.playback.currentTrack != null && !uiState.isInPictureInPicture,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(tween(240)),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(tween(220))
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(tween(220)),
+                modifier = Modifier.zIndex(1f)
             ) {
                 FullPlayerSheet(
                     state = uiState,
                     actions = viewModel,
                     onTrackOverflow = { overflowTrack = it },
-                    onAddToPlaylist = { addToPlaylistTrack = it }
+                    onAddToPlaylist = { addToPlaylistTrack = it },
+                    onVideoSlotPositioned = { rect -> fullVideoSlotRect = rect }
                 )
             }
 
             // Wrapped Story Viewer Overlay
             AnimatedVisibility(
-                visible = uiState.isWrappedOpen,
+                visible = uiState.isWrappedOpen && !uiState.isInPictureInPicture,
                 enter = fadeIn(tween(260)) + scaleIn(initialScale = 0.96f),
-                exit = fadeOut(tween(220))
+                exit = fadeOut(tween(220)),
+                modifier = Modifier.zIndex(4f)
             ) {
                 WrappedScreen(
                     stats = uiState.wrappedStats,
@@ -542,11 +547,57 @@ fun SonoraApp(
                 )
             }
 
+            // Persistent hoisted YouTube Video Player (FullPlayer 16:9 slot -> MiniPlayer 96x54 slot -> Fullscreen PiP)
+            val activeVideoTrack = uiState.playback.currentTrack?.takeIf {
+                uiState.isVideoMode && it.youtubeVideoId.isNotBlank()
+            }
+            if (activeVideoTrack != null) {
+                val targetRect = if (uiState.isFullPlayerOpen) fullVideoSlotRect else miniVideoSlotRect
+                val playerModifier = when {
+                    uiState.isInPictureInPicture -> Modifier
+                        .fillMaxSize()
+                        .zIndex(8f)
+                    uiState.isWrappedOpen -> Modifier
+                        .size(1.dp)
+                        .zIndex(0f)
+                    targetRect != null && targetRect.width > 0 && targetRect.height > 0 -> Modifier
+                        .zIndex(2f)
+                        .offset { IntOffset(targetRect.left, targetRect.top) }
+                        .size(
+                            width = with(density) { targetRect.width.toDp() },
+                            height = with(density) { targetRect.height.toDp() }
+                        )
+                    else -> Modifier
+                        .size(1.dp)
+                        .zIndex(0f)
+                }
+                YouTubeVideoPlayer(
+                    videoId = activeVideoTrack.youtubeVideoId,
+                    title = activeVideoTrack.title,
+                    artist = activeVideoTrack.displayArtist,
+                    isInPictureInPicture = uiState.isInPictureInPicture,
+                    isMiniMode = !uiState.isFullPlayerOpen && !uiState.isInPictureInPicture,
+                    onMiniTapExpand = viewModel::openFullPlayer,
+                    onVideoEnded = viewModel::skipNext,
+                    onFallbackOpenExternal = { url ->
+                        runCatching {
+                            val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(viewIntent)
+                        }
+                    },
+                    modifier = playerModifier
+                )
+            }
+
             // Launch Resonance Intro Overlay
-            OpeningIntroOverlay(
-                visible = uiState.showIntroOverlay,
-                onFinished = viewModel::dismissIntroOverlay
-            )
+            Box(modifier = Modifier.fillMaxSize().zIndex(6f)) {
+                OpeningIntroOverlay(
+                    visible = uiState.showIntroOverlay,
+                    onFinished = viewModel::dismissIntroOverlay
+                )
+            }
         }
     }
 }

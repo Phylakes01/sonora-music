@@ -67,6 +67,7 @@ import com.sonora.music.model.SearchCategory
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
 import com.sonora.music.ui.components.MusicVideoCard
 import com.sonora.music.ui.components.ShimmerRowPlaceholder
 import com.sonora.music.ui.components.SonoraArtwork
@@ -281,15 +282,6 @@ fun SearchScreen(
         ) {
             if (search.query.isBlank()) {
                 if (search.category == SearchCategory.VIDEOS) {
-                    item(key = "videos_browse_import_banner") {
-                        YouTubeSearchImportBanner(
-                            query = "",
-                            isUrlMatch = false,
-                            onImportDirect = { actions.onOpenImportYouTube() },
-                            onOpenDialog = { actions.onOpenImportYouTube() },
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                    }
                     if (browseVideos.isNotEmpty()) {
                         item(key = "videos_browse_header") {
                             SonoraSectionHeader(
@@ -497,6 +489,42 @@ fun SearchScreen(
                         }
                     }
 
+                    // Music Videos shelf inside SearchCategory.ALL (first when songs came purely from video fallback or empty)
+                    val prioritizeVideosInAll = search.category == SearchCategory.ALL &&
+                        searchVideos.isNotEmpty() &&
+                        (search.songs.isEmpty() || search.songs.firstOrNull()?.source == TrackSource.YOUTUBE || search.songs.any { it.youtubeVideoId == searchVideos.firstOrNull()?.youtubeVideoId })
+                    if (prioritizeVideosInAll) {
+                        item(key = "search_all_videos_top_section") {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SonoraSectionHeader(
+                                    title = "Music Videos",
+                                    actionLabel = if (searchVideos.size > 4) "See all" else null,
+                                    onActionClick = { actions.selectSearchCategory(SearchCategory.VIDEOS) },
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(searchVideos.take(10), key = { "search_mv_top_${it.id}" }) { video ->
+                                        val isCurrent = state.playback.currentTrack?.id == video.id
+                                        MusicVideoCard(
+                                            track = video,
+                                            isCurrent = isCurrent,
+                                            isPlaying = isCurrent && state.playback.isPlaying,
+                                            isLiked = video.id in state.likedTrackIds,
+                                            onClick = { actions.onPlayMusicVideo(video, searchVideos) },
+                                            onLikeClick = { actions.toggleLike(video) },
+                                            onMoreClick = { onTrackOverflow(video) },
+                                            modifier = Modifier.width(244.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Songs
                     if ((search.category == SearchCategory.ALL || search.category == SearchCategory.SONGS) &&
                         search.songs.isNotEmpty()
@@ -536,8 +564,8 @@ fun SearchScreen(
                         }
                     }
 
-                    // Music Videos shelf inside SearchCategory.ALL
-                    if (search.category == SearchCategory.ALL && searchVideos.isNotEmpty()) {
+                    // Music Videos shelf inside SearchCategory.ALL (when songs came first)
+                    if (search.category == SearchCategory.ALL && searchVideos.isNotEmpty() && !prioritizeVideosInAll) {
                         item(key = "search_all_videos_section") {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 SonoraSectionHeader(

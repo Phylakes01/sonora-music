@@ -52,11 +52,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.roundToIntRect
 import androidx.compose.ui.unit.sp
 import com.sonora.music.model.PlaybackState
 import com.sonora.music.ui.components.SonoraArtwork
@@ -84,7 +88,9 @@ fun MiniPlayer(
     onSkipNext: () -> Unit,
     onSkipPrev: () -> Unit,
     onToggleLike: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isVideoMode: Boolean = false,
+    onMiniVideoSlotPositioned: ((IntRect) -> Unit)? = null
 ) {
     val track = playback.currentTrack ?: return
     val haptic = LocalHapticFeedback.current
@@ -198,12 +204,35 @@ fun MiniPlayer(
                     .graphicsLayer { translationX = dragOffset.value * 0.40f },
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SonoraArtwork(
-                    artworkUrl = track.artworkUrl,
-                    title = track.title,
-                    cornerRadius = 6.dp,
-                    modifier = Modifier.size(46.dp)
-                )
+                if (isVideoMode && track.youtubeVideoId.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .width(96.dp)
+                            .height(54.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF101014))
+                            .onGloballyPositioned { coords ->
+                                onMiniVideoSlotPositioned?.invoke(coords.boundsInRoot().roundToIntRect())
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SonoraArtwork(
+                            artworkUrl = track.artworkUrl,
+                            title = track.title,
+                            cornerRadius = 6.dp,
+                            modifier = Modifier
+                                .width(96.dp)
+                                .height(54.dp)
+                        )
+                    }
+                } else {
+                    SonoraArtwork(
+                        artworkUrl = track.artworkUrl,
+                        title = track.title,
+                        cornerRadius = 6.dp,
+                        modifier = Modifier.size(46.dp)
+                    )
+                }
 
                 Spacer(modifier = Modifier.width(10.dp))
 

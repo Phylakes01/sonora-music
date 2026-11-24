@@ -97,6 +97,7 @@ data class SonoraUiState(
     val isAiGeneratorOpen: Boolean = false,
     val snackbarMessage: String? = null,
     val isVideoMode: Boolean = false,
+    val isInPictureInPicture: Boolean = false,
     val isImportYouTubeOpen: Boolean = false,
     val isImportingYouTube: Boolean = false,
     val youtubeImportError: String? = null
@@ -182,6 +183,8 @@ interface SonoraActions {
 
     fun onSetVideoMode(enabled: Boolean) {}
     fun onPlayMusicVideo(track: Track, queue: List<Track> = listOf(track)) {}
+    fun onEnterPictureInPicture() {}
+    fun onActivityStopped(inPip: Boolean) {}
     fun onOpenImportYouTube() {}
     fun onCloseImportYouTube() {}
     fun onImportYouTube(query: String) {}

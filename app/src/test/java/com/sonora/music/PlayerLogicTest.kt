@@ -7,6 +7,7 @@ import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.player.AudioEffectsManager
 import com.sonora.music.player.QueueEngine
+import com.sonora.music.player.YouTubePlaybackBridge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -333,5 +334,55 @@ class PlayerLogicTest {
         assertFalse(QueueEngine.isPlayableFullStreamUrl("https://audio-ssl.itunes.apple.com/itunes-assets/test.m4a"))
         assertFalse(QueueEngine.isPlayableFullStreamUrl(""))
         assertTrue(QueueEngine.isPlayableFullStreamUrl("https://api.audius.co/v1/tracks/oWarYJg/stream?app_name=Sonora"))
+    }
+
+    @Test
+    fun youTubePlaybackBridge_syncsStateAndRoutesNotificationCommands() {
+        YouTubePlaybackBridge.clear()
+        val track = Track(
+            id = "yt_hX9S94XsySk",
+            title = "Hong Kong (feat. 王菲季候風)",
+            artist = "The Weeknd",
+            durationSec = 305,
+            source = TrackSource.YOUTUBE,
+            youtubeVideoId = "hX9S94XsySk",
+            hasMusicVideo = true
+        )
+        var lastPlayCommand: Boolean? = null
+        var lastSeekCommand: Long? = null
+        var nextClicks = 0
+        var prevClicks = 0
+
+        YouTubePlaybackBridge.onCommandPlayPause = { lastPlayCommand = it }
+        YouTubePlaybackBridge.onCommandSeekTo = { lastSeekCommand = it }
+        YouTubePlaybackBridge.onCommandSkipNext = { nextClicks++ }
+        YouTubePlaybackBridge.onCommandSkipPrev = { prevClicks++ }
+
+        YouTubePlaybackBridge.setActiveVideo(track, listOf(track), index = 0, initialPlaying = true)
+        assertEquals(track.id, YouTubePlaybackBridge.activeTrack.value?.id)
+        assertTrue(YouTubePlaybackBridge.isPlaying.value)
+        assertEquals(305_000L, YouTubePlaybackBridge.durationMs.value)
+
+        YouTubePlaybackBridge.reportPlayerState(isPlaying = true, positionMs = 42_500L, durationMs = 305_000L)
+        assertEquals(42_500L, YouTubePlaybackBridge.positionMs.value)
+
+        YouTubePlaybackBridge.requestTogglePlayPause()
+        assertEquals(false, lastPlayCommand)
+        assertFalse(YouTubePlaybackBridge.isPlaying.value)
+
+        YouTubePlaybackBridge.requestSeekTo(95_000L)
+        assertEquals(95_000L, lastSeekCommand)
+        assertEquals(95_000L, YouTubePlaybackBridge.positionMs.value)
+
+        YouTubePlaybackBridge.requestSkipNext()
+        YouTubePlaybackBridge.requestSkipPrev()
+        assertEquals(1, nextClicks)
+        assertEquals(1, prevClicks)
+
+        YouTubePlaybackBridge.onCommandPlayPause = null
+        YouTubePlaybackBridge.onCommandSeekTo = null
+        YouTubePlaybackBridge.onCommandSkipNext = null
+        YouTubePlaybackBridge.onCommandSkipPrev = null
+        YouTubePlaybackBridge.clear()
     }
 }

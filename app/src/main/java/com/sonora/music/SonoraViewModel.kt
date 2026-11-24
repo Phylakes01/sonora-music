@@ -45,6 +45,7 @@ import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.player.PlaybackController
 import com.sonora.music.player.QueueEngine
+import com.sonora.music.player.YouTubePlaybackBridge
 import com.sonora.music.ui.theme.EmeraldAccent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -103,6 +105,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     val uiState: StateFlow<SonoraUiState> = _uiState.asStateFlow()
 
     private var permissionRequester: (() -> Unit)? = null
+    private var pipRequester: (() -> Unit)? = null
     private var initialLoadJob: Job? = null
     private var homeJob: Job? = null
     private var preWarmJob: Job? = null
@@ -119,6 +122,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         playbackController.connect()
         refreshHome()
         refreshOutputDevices()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { catalogApi.warmYouTubeIndex() }
+        }
         if (hasLocalAudioPermission()) {
             scanLocalFiles()
         }
@@ -126,6 +132,43 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
 
     fun registerLocalPermissionRequester(requester: () -> Unit) {
         permissionRequester = requester
+    }
+
+    fun registerPipRequester(requester: () -> Unit) {
+        pipRequester = requester
+    }
+
+    fun setPictureInPictureMode(inPip: Boolean) {
+        _uiState.update { it.copy(isInPictureInPicture = inPip) }
+    }
+
+    fun shouldAutoEnterPictureInPicture(): Boolean {
+        val state = _uiState.value
+        val track = state.playback.currentTrack
+        return state.isVideoMode &&
+            track != null &&
+            track.youtubeVideoId.isNotBlank() &&
+            (YouTubePlaybackBridge.isPlaying.value || state.playback.isPlaying)
+    }
+
+    override fun onEnterPictureInPicture() {
+        val state = _uiState.value
+        val track = state.playback.currentTrack ?: return
+        if (!state.isVideoMode && track.youtubeVideoId.isNotBlank()) {
+            onSetVideoMode(true)
+        }
+        pipRequester?.invoke()
+    }
+
+    override fun onActivityStopped(inPip: Boolean) {
+        val state = _uiState.value
+        if (inPip || !state.isVideoMode) return
+        val current = state.playback.currentTrack ?: return
+        val videoPlaying = YouTubePlaybackBridge.isPlaying.value || state.playback.isPlaying
+        // When switching apps outside PiP or turning screen off on a hybrid track, hand off to full background ExoPlayer audio.
+        if (videoPlaying && !current.isVideoOnly && current.streamUrl.isNotBlank()) {
+            onSetVideoMode(false)
+        }
     }
 
     fun onLocalAudioPermissionResult(granted: Boolean) {
@@ -288,6 +331,17 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     private fun observePlaybackAndDownloads() {
+        YouTubePlaybackBridge.onCommandSkipNext = { skipNext() }
+        YouTubePlaybackBridge.onCommandSkipPrev = { skipPrev() }
+        YouTubePlaybackBridge.onCommandSkipToIndex = { targetIdx ->
+            val target = _uiState.value.playback.queue.getOrNull(targetIdx)
+            if (target != null) {
+                val stayVideo = target.isVideoOnly || target.youtubeVideoId.isNotBlank()
+                _uiState.update { it.copy(isVideoMode = stayVideo) }
+                playbackController.skipToQueueIndex(targetIdx, startPausedForVideo = stayVideo)
+            }
+        }
+
         viewModelScope.launch {
             playbackController.playbackState.collect { pb ->
                 val newTrack = pb.currentTrack
@@ -302,10 +356,46 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     } else {
                         state.detail
                     }
+                    val effectivePb = if (state.isVideoMode && newTrack?.youtubeVideoId?.isNotBlank() == true) {
+                        val ytDur = YouTubePlaybackBridge.durationMs.value
+                        pb.copy(
+                            isPlaying = YouTubePlaybackBridge.isPlaying.value,
+                            isBuffering = false,
+                            positionMs = YouTubePlaybackBridge.positionMs.value,
+                            durationMs = if (ytDur > 0L) ytDur else pb.durationMs
+                        )
+                    } else {
+                        pb
+                    }
                     state.copy(
-                        playback = pb,
+                        playback = effectivePb,
                         detail = updatedDetail
                     )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            combine(
+                YouTubePlaybackBridge.isPlaying,
+                YouTubePlaybackBridge.positionMs,
+                YouTubePlaybackBridge.durationMs
+            ) { ytPlaying, ytPos, ytDur ->
+                Triple(ytPlaying, ytPos, ytDur)
+            }.collect { (ytPlaying, ytPos, ytDur) ->
+                _uiState.update { state ->
+                    if (!state.isVideoMode || state.playback.currentTrack?.youtubeVideoId.isNullOrBlank()) {
+                        state
+                    } else {
+                        state.copy(
+                            playback = state.playback.copy(
+                                isPlaying = ytPlaying,
+                                isBuffering = false,
+                                positionMs = ytPos,
+                                durationMs = if (ytDur > 0L) ytDur else state.playback.durationMs
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -539,8 +629,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     override fun togglePlayPause() {
         val state = _uiState.value
         val current = state.playback.currentTrack
-        if (state.isVideoMode && current != null && !current.isVideoOnly) {
-            _uiState.update { it.copy(isVideoMode = false) }
+        if (state.isVideoMode && current != null && current.youtubeVideoId.isNotBlank()) {
+            YouTubePlaybackBridge.requestTogglePlayPause()
+            return
         }
         playbackController.togglePlayPause()
     }
@@ -587,7 +678,14 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         playbackController.skipPrev()
     }
 
-    override fun seekTo(positionMs: Long) = playbackController.seekTo(positionMs)
+    override fun seekTo(positionMs: Long) {
+        val state = _uiState.value
+        if (state.isVideoMode && state.playback.currentTrack?.youtubeVideoId?.isNotBlank() == true) {
+            YouTubePlaybackBridge.requestSeekTo(positionMs)
+            return
+        }
+        playbackController.seekTo(positionMs)
+    }
 
     override fun toggleShuffle() = playbackController.toggleShuffle()
 
@@ -986,11 +1084,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             return
         }
 
-        val effectiveQuery = if (cleanQuery.contains("maria deborah", ignoreCase = true)) {
-            cleanQuery.replace("maria deborah", "Mariah Deborah", ignoreCase = true)
-        } else {
-            cleanQuery
-        }
+        val effectiveQuery = normalizeSearchQuery(cleanQuery)
 
         _uiState.update { it.copy(search = it.search.copy(isSearching = true)) }
         supervisorScope {
@@ -1005,12 +1099,40 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 filterImportedVideosForQuery(store.getImportedYouTubeTracks(), cleanQuery, effectiveQuery)
             }
 
-            val songs = RegionalContentFilter.filterTracks(songsDef.await()).filter(::isNonPreviewCatalogTrack)
+            val rawSongs = RegionalContentFilter.filterTracks(songsDef.await()).filter(::isNonPreviewCatalogTrack)
             val musicVideos = RegionalContentFilter.filterTracks(
                 (importedDef.await() + videosDef.await())
                     .filter(::isNonPreviewCatalogTrack)
                     .distinctBy { it.youtubeVideoId.ifBlank { it.id } }
             )
+            val coreQueryTokens = effectiveQuery
+                .lowercase()
+                .split(Regex("[^a-z0-9]+"))
+                .filter { it.length >= 2 && it !in setOf("by", "the", "official", "mv", "video", "song", "music") }
+            val songsAlreadyCoverStrongMatch = coreQueryTokens.isNotEmpty() && rawSongs.any { song ->
+                val hay = "${song.title} ${song.artist}".lowercase()
+                val isVerifiedOrPopular = song.youtubeVideoId.isNotBlank() || song.playCount >= 50_000L
+                isVerifiedOrPopular && coreQueryTokens.all { tok -> hay.contains(tok) }
+            }
+            val directPlayVideosToSurface = if (!songsAlreadyCoverStrongMatch && musicVideos.isNotEmpty()) {
+                val existingVideoIds = rawSongs.mapNotNull { it.youtubeVideoId.takeIf { id -> id.isNotBlank() } }.toSet()
+                val strongMvMatches = musicVideos.filter { mv ->
+                    mv.youtubeVideoId !in existingVideoIds && (
+                        coreQueryTokens.isEmpty() ||
+                            coreQueryTokens.all { tok -> "${mv.title} ${mv.artist}".lowercase().contains(tok) }
+                        )
+                }
+                (if (strongMvMatches.isNotEmpty()) strongMvMatches else musicVideos.filter { it.youtubeVideoId !in existingVideoIds })
+                    .take(6)
+            } else {
+                emptyList()
+            }
+            val songs = if (directPlayVideosToSurface.isNotEmpty()) {
+                (directPlayVideosToSurface + rawSongs)
+                    .distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+            } else {
+                rawSongs
+            }
             val artists = RegionalContentFilter.filterArtists(artistsDef.await())
             val playlists = playlistsDef.await()
             val podcasts = podcastsDef.await().filterNot {
@@ -1067,6 +1189,21 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     track.youtubeVideoId.equals(q, ignoreCase = true)
             }
         }
+    }
+
+    private fun normalizeSearchQuery(rawQuery: String): String {
+        var result = rawQuery.trim()
+        result = Regex("""\b(?:the\s+weekend|weekend|weeknd)\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "The Weeknd")
+        result = Regex("""\b(?:maria\s+deborah|maria\s+debora|mariadeborah)\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Mariah Deborah")
+        result = Regex("""\besremborac\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Esremborak")
+        result = Regex("""\bben\s+and\s+ben\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Ben&Ben")
+        result = Regex("""\bcup\s+of\s+jo\b""", RegexOption.IGNORE_CASE)
+            .replace(result, "Cup of Joe")
+        return result.replace(Regex("""\s{2,}"""), " ").trim()
     }
 
     private fun recordRecentSearch(query: String) {
@@ -1530,8 +1667,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 showSnackbar("No music video linked for \"${currentTrack.title}\"")
                 return
             }
-            playbackController.pause()
             _uiState.update { it.copy(isVideoMode = true) }
+            playbackController.enterYouTubeModeForCurrentTrack()
         } else {
             if (currentTrack != null &&
                 currentTrack.streamUrl.isBlank() &&
@@ -1540,8 +1677,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 showSnackbar("Audio-only stream unavailable for this MV — play video mode")
                 return
             }
+            val resumePositionMs = YouTubePlaybackBridge.positionMs.value
             _uiState.update { it.copy(isVideoMode = false) }
-            playbackController.play()
+            playbackController.resumeAudioFromVideoPosition(resumePositionMs)
         }
     }
 

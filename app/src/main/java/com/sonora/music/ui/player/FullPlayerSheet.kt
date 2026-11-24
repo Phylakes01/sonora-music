@@ -53,6 +53,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Repeat
@@ -92,13 +93,17 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.roundToIntRect
 import androidx.compose.ui.unit.sp
 import com.sonora.music.model.Artist
 import com.sonora.music.model.DetailRoute
@@ -138,7 +143,8 @@ fun FullPlayerSheet(
     actions: SonoraActions,
     onTrackOverflow: (Track) -> Unit,
     @Suppress("UNUSED_PARAMETER") onAddToPlaylist: (Track) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onVideoSlotPositioned: ((IntRect) -> Unit)? = null
 ) {
     val track = state.playback.currentTrack ?: return
     val playback = state.playback
@@ -432,15 +438,17 @@ fun FullPlayerSheet(
                                 spotColor = Color.Black
                             )
                             .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF101014))
                             .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                            .onGloballyPositioned { coords ->
+                                onVideoSlotPositioned?.invoke(coords.boundsInRoot().roundToIntRect())
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        YouTubeVideoPlayer(
-                            videoId = track.youtubeVideoId,
-                            title = track.title,
-                            artist = track.displayArtist,
-                            onVideoEnded = { actions.skipNext() },
-                            onFallbackOpenExternal = { url -> openExternalYoutubeUrl(context, url) },
-                            modifier = Modifier.fillMaxSize()
+                        CircularProgressIndicator(
+                            color = EmeraldAccent.copy(alpha = 0.5f),
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
@@ -475,30 +483,65 @@ fun FullPlayerSheet(
                             }
                         }
 
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = Color(0xFF22222A),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .clickable { actions.openFullTrackExternal(track) }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = Color(0xFF22222A),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        actions.onEnterPictureInPicture()
+                                    }
                             ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                                    contentDescription = null,
-                                    tint = TextPrimary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = "Watch on YouTube",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                    color = TextPrimary
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.PictureInPictureAlt,
+                                        contentDescription = "Picture in Picture",
+                                        tint = EmeraldAccent,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "PiP",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = Color(0xFF22222A),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .clickable { actions.openFullTrackExternal(track) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                        contentDescription = null,
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "Watch on YouTube",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = TextPrimary
+                                    )
+                                }
                             }
                         }
                     }
@@ -609,87 +652,85 @@ fun FullPlayerSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (!isVideoActive) {
-                // Clean SonoraSlimSlider + crisp tabular-nums timestamps (or LIVE indicator)
-                if (track.isLive) {
-                    Row(
+            // Clean SonoraSlimSlider + crisp tabular-nums timestamps (or LIVE indicator)
+            if (track.isLive) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(CoralHeart)
+                    )
+                    Text(
+                        text = "LIVE",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Live radio broadcast",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                }
+            } else {
+                val safeMax = durationMs.coerceAtLeast(1L).toFloat()
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    SonoraSlimSlider(
+                        value = displayPositionMs.toFloat().coerceIn(0f, safeMax),
+                        onValueChange = { value -> pendingSeekMs = value },
+                        valueRange = 0f..safeMax,
+                        activeColor = Color.White,
+                        inactiveColor = Color(0xFF4D4D4D),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(CoralHeart)
-                        )
                         Text(
-                            text = "LIVE",
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
+                            text = formatMs(displayPositionMs),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFeatureSettings = "tnum"
                             ),
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Live radio broadcast",
-                            style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
-                    }
-                } else {
-                    val safeMax = durationMs.coerceAtLeast(1L).toFloat()
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        SonoraSlimSlider(
-                            value = displayPositionMs.toFloat().coerceIn(0f, safeMax),
-                            onValueChange = { value -> pendingSeekMs = value },
-                            valueRange = 0f..safeMax,
-                            activeColor = Color.White,
-                            inactiveColor = Color(0xFF4D4D4D),
-                            modifier = Modifier.fillMaxWidth()
+                        val remainingMs = (durationMs - displayPositionMs).coerceAtLeast(0L)
+                        Text(
+                            text = if (showRemainingTime) {
+                                "-${formatMs(remainingMs)}"
+                            } else {
+                                formatMs(durationMs)
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = TextMuted,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { showRemainingTime = !showRemainingTime }
+                                .padding(horizontal = 2.dp, vertical = 1.dp)
                         )
-
-                        Spacer(modifier = Modifier.height(4.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = formatMs(displayPositionMs),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFeatureSettings = "tnum"
-                                ),
-                                color = TextSecondary
-                            )
-                            val remainingMs = (durationMs - displayPositionMs).coerceAtLeast(0L)
-                            Text(
-                                text = if (showRemainingTime) {
-                                    "-${formatMs(remainingMs)}"
-                                } else {
-                                    formatMs(durationMs)
-                                },
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontFeatureSettings = "tnum"
-                                ),
-                                color = TextMuted,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .clickable { showRemainingTime = !showRemainingTime }
-                                    .padding(horizontal = 2.dp, vertical = 1.dp)
-                            )
-                        }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(14.dp))
             }
 
-            // Classic transport bar: 3-state Shuffle, Prev, Play/Pause (or Video Queue pill), Next, Repeat
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Classic transport bar: 3-state Shuffle, Prev, Play/Pause, Next, Repeat
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -749,72 +790,32 @@ fun FullPlayerSheet(
                     )
                 }
 
-                if (isVideoActive) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = Color(0xFF23232B),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-                        modifier = Modifier
-                            .height(46.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(enabled = !track.isVideoOnly) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                actions.onSetVideoMode(false)
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (track.isVideoOnly) {
-                                    Icons.Rounded.OndemandVideo
-                                } else {
-                                    Icons.Rounded.MusicNote
-                                },
-                                contentDescription = null,
-                                tint = EmeraldAccent,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = if (track.isVideoOnly) "In-App Video" else "Switch to Audio",
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                ),
-                                color = TextPrimary
-                            )
-                        }
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(66.dp)
-                            .scale(playScale)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .clickable {
-                                playBounce = true
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                actions.togglePlayPause()
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (playback.isBuffering) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(58.dp),
-                                color = Color.Black.copy(alpha = 0.65f),
-                                strokeWidth = 2.5.dp
-                            )
-                        }
-                        Icon(
-                            imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (playback.isPlaying) "Pause" else "Play",
-                            tint = Color.Black,
-                            modifier = Modifier.size(34.dp)
+                Box(
+                    modifier = Modifier
+                        .size(66.dp)
+                        .scale(playScale)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .clickable {
+                            playBounce = true
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            actions.togglePlayPause()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (playback.isBuffering && !isVideoActive) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(58.dp),
+                            color = Color.Black.copy(alpha = 0.65f),
+                            strokeWidth = 2.5.dp
                         )
                     }
+                    Icon(
+                        imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (playback.isPlaying) "Pause" else "Play",
+                        tint = Color.Black,
+                        modifier = Modifier.size(34.dp)
+                    )
                 }
 
                 IconButton(

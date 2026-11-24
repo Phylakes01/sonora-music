@@ -42,6 +42,34 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
 
     private val oEmbedCache = ConcurrentHashMap<String, Track>()
     private val feedCache = ConcurrentHashMap<String, CacheEntry<List<Track>>>()
+    private val rssIndexCache = ConcurrentHashMap<String, Track>()
+    @Volatile
+    private var lastRssIndexWarmMs: Long = 0L
+
+    suspend fun warmRssSearchIndex(force: Boolean = false) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (!force && rssIndexCache.isNotEmpty() && now - lastRssIndexWarmMs < INDEX_CACHE_TTL_MS) {
+            return@withContext
+        }
+        VERIFIED_CHANNELS.chunked(8).forEach { batch ->
+            val fetched = withTimeoutOrNull(5_000L) {
+                coroutineScope {
+                    batch.map { ch ->
+                        async {
+                            withTimeoutOrNull(4_500L) {
+                                fetchChannelRssVideos(ch.channelId, ch.regionHint)
+                            }.orEmpty()
+                        }
+                    }.awaitAll().flatten()
+                }
+            }.orEmpty()
+            fetched.forEach { track ->
+                val key = track.youtubeVideoId.ifBlank { track.id }
+                rssIndexCache[key] = track
+            }
+        }
+        lastRssIndexWarmMs = System.currentTimeMillis()
+    }
 
     fun extractVideoId(input: String): String? {
         val trimmed = input.trim()
@@ -210,9 +238,16 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         val qNorm = normalizeForMatch(expandedQuery)
         val qTokens = tokenize(expandedQuery)
         if (qNorm.isEmpty()) return@withContext emptyList()
+        val effectiveTokens = qTokens.filterNot { it in SEARCH_CONNECTOR_WORDS }.ifEmpty { qTokens }
 
         val curatedMatches = (PH_MV_TRACKS + GLOBAL_MV_TRACKS)
             .map { it.toTrack() }
+            .mapNotNull { track ->
+                val score = scoreVideoMatch(track, qNorm, qTokens)
+                if (score > 0) track to (score + 10) else null
+            }
+
+        val indexedRssMatches = rssIndexCache.values
             .mapNotNull { track ->
                 val score = scoreVideoMatch(track, qNorm, qTokens)
                 if (score > 0) track to score else null
@@ -221,17 +256,27 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         val matchingChannels = VERIFIED_CHANNELS.filter { ch ->
             val chNorm = normalizeForMatch(ch.name)
             chNorm.contains(qNorm) || qNorm.contains(chNorm) ||
-                qTokens.any { token -> token.length >= 3 && chNorm.contains(token) }
-        }.take(2)
+                effectiveTokens.any { token -> token.length >= 3 && chNorm.contains(token) }
+        }.take(4)
 
         val channelRssTracks = if (matchingChannels.isNotEmpty()) {
-            coroutineScope {
-                matchingChannels.map { ch ->
-                    async { fetchChannelRssVideos(ch.channelId, ch.regionHint) }
-                }.awaitAll().flatten()
-            }
+            withTimeoutOrNull(4_500L) {
+                coroutineScope {
+                    matchingChannels.map { ch ->
+                        async {
+                            withTimeoutOrNull(4_000L) {
+                                fetchChannelRssVideos(ch.channelId, ch.regionHint)
+                            }.orEmpty()
+                        }
+                    }.awaitAll().flatten()
+                }
+            }.orEmpty()
         } else {
             emptyList()
+        }
+        channelRssTracks.forEach { track ->
+            val key = track.youtubeVideoId.ifBlank { track.id }
+            rssIndexCache[key] = track
         }
 
         val rssMatches = channelRssTracks.mapNotNull { track ->
@@ -239,7 +284,7 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             if (score > 0) track to score else null
         }
 
-        val sorted = (curatedMatches + rssMatches)
+        val sorted = (curatedMatches + indexedRssMatches + rssMatches)
             .sortedByDescending { it.second }
             .map { it.first }
 
@@ -752,14 +797,13 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             (RAW_VIDEO_ID_REGEX.matches(input) && input.any { it.isUpperCase() || it.isDigit() || it == '-' || it == '_' })
 
     private fun expandSearchAlias(query: String): String {
-        val lower = query.lowercase(Locale.ROOT).trim()
-        return when {
-            lower == "maria deborah" || lower == "maria debora" || lower == "mariadeborah" ->
-                "Mariah Deborah"
-            lower.contains("maria deborah") ->
-                lower.replace("maria deborah", "Mariah Deborah")
-            else -> query
-        }
+        var normalized = query.trim()
+        normalized = WEEKEND_ALIAS_REGEX.replace(normalized, "The Weeknd")
+        normalized = MARIA_DEBORAH_ALIAS_REGEX.replace(normalized, "Mariah Deborah")
+        normalized = ESREMBORAK_ALIAS_REGEX.replace(normalized, "Esremborak")
+        normalized = BEN_AND_BEN_ALIAS_REGEX.replace(normalized, "Ben&Ben")
+        normalized = CUP_OF_JO_ALIAS_REGEX.replace(normalized, "Cup of Joe")
+        return normalized.replace(MULTI_SPACE_REGEX, " ").trim()
     }
 
     private fun scoreVideoMatch(track: Track, qNorm: String, qTokens: List<String>): Int {
@@ -775,16 +819,16 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         if (combined.contains(qNorm)) return 80
 
         if (qTokens.isEmpty()) return 0
+        val effectiveTokens = qTokens.filterNot { it in SEARCH_CONNECTOR_WORDS }
+            .ifEmpty { qTokens }
         val combinedTokens = tokenize(combined).toSet()
-        val matched = qTokens.count { qTok ->
+        val matched = effectiveTokens.count { qTok ->
             combinedTokens.any { it == qTok || (qTok.length >= 3 && it.startsWith(qTok)) }
         }
-        return if (matched == qTokens.size) {
-            60 + matched * 10
-        } else if (qTokens.size >= 2 && matched >= qTokens.size - 1 && matched > 0) {
-            30 + matched * 5
-        } else {
-            0
+        return when {
+            matched == effectiveTokens.size -> 90 + matched * 10
+            effectiveTokens.size >= 2 && matched >= effectiveTokens.size - 1 && matched > 0 -> 35 + matched * 5
+            else -> 0
         }
     }
 
@@ -893,6 +937,7 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         private const val RSS_ENDPOINT = "https://www.youtube.com/feeds/videos.xml"
         private const val DEFAULT_VIDEO_DURATION_SEC = 210
         private const val FEED_CACHE_TTL_MS = 120_000L
+        private const val INDEX_CACHE_TTL_MS = 600_000L
 
         private val RAW_VIDEO_ID_REGEX = Regex("""^[A-Za-z0-9_-]{11}$""")
         private val RAW_PLAYLIST_ID_REGEX = Regex("""^(?:PL|UU|OLAK5uy_|LL|FL)[A-Za-z0-9_-]{8,}$""")
@@ -909,6 +954,12 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         private val LIST_PARAM_REGEX = Regex("""[?&]list=([A-Za-z0-9_-]{10,})(?:[&#\s]|$)""")
         private val CHANNEL_PATH_REGEX = Regex("""youtube\.com/channel/(UC[A-Za-z0-9_-]{20,})(?:[?&#/\s]|$)""", RegexOption.IGNORE_CASE)
         private val HANDLE_IN_URL_REGEX = Regex("""youtube\.com/@([A-Za-z0-9._-]+)(?:[?&#/\s]|$)""", RegexOption.IGNORE_CASE)
+
+        private val WEEKEND_ALIAS_REGEX = Regex("""\b(?:the\s+weekend|weekend|weeknd)\b""", RegexOption.IGNORE_CASE)
+        private val MARIA_DEBORAH_ALIAS_REGEX = Regex("""\b(?:maria\s+deborah|maria\s+debora|mariadeborah)\b""", RegexOption.IGNORE_CASE)
+        private val ESREMBORAK_ALIAS_REGEX = Regex("""\besremborac\b""", RegexOption.IGNORE_CASE)
+        private val BEN_AND_BEN_ALIAS_REGEX = Regex("""\bben\s+and\s+ben\b""", RegexOption.IGNORE_CASE)
+        private val CUP_OF_JO_ALIAS_REGEX = Regex("""\bcup\s+of\s+jo\b""", RegexOption.IGNORE_CASE)
 
         private val PERFORMS_TITLE_REGEX = Regex(
             """^(.+?)\s+performs\s+["\u201C'](.+?)["\u201D'](?:\s+LIVE.*|\s+on\s+.*|$)""",
@@ -941,10 +992,15 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
         private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
 
         private val GENERIC_HUB_CHANNELS = setOf(
-            "wish 107.5", "wish 1075", "the cozy cove", "nine degrees north", "tower of doom", "youtube"
+            "wish 107.5", "wish 1075", "the cozy cove", "nine degrees north",
+            "abs-cbn star music", "viva records", "tarsier records", "hybe labels",
+            "jyp entertainment", "smtown", "tower of doom", "youtube"
         )
         private val FILLER_WORDS = setOf(
             "the", "a", "an", "and", "of", "ft", "feat", "with", "x"
+        )
+        private val SEARCH_CONNECTOR_WORDS = setOf(
+            "by", "the", "official", "mv", "video", "music", "song", "ft", "feat"
         )
 
         private val HANDLE_ALIASES = mapOf(
@@ -953,6 +1009,13 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             "@bini_ph" to "UCtOcDBKgyr-f50SgbMErFkQ",
             "@biniph" to "UCtOcDBKgyr-f50SgbMErFkQ",
             "@biniofficial" to "UCtOcDBKgyr-f50SgbMErFkQ",
+            "@starmusicph" to "UCIWZ1_W5BqsvW9fm1cYFPpQ",
+            "@vivarecordsofficial" to "UCS09CkK8fjPJ_nHD6fcGMSw",
+            "@tarsierrecords" to "UC9fACMkCC80Lz8aZV--rNwA",
+            "@ninedegreesnorthrecords" to "UCNO66UYt0xSeEMw9d5v-37w",
+            "@officialsb19" to "UCm4v7afBTnJKRm4SlfHJzyg",
+            "@benandbenmusic" to "UCD2HT__OY6xzj-YbnAXJhfA",
+            "@cupofjoemusic_" to "UCPq0kgKjpNzryoNbRp5eUyQ",
             "@theweeknd" to "UC0WP5P-ufpRfjbNrmOWwLBQ",
             "@brunomars" to "UCoUM-UJ7rirJYP8CQ0EIaHA",
             "@billieeilish" to "UCiGm_E4ZwYSHV3bcW1pnSeQ",
@@ -966,12 +1029,36 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             "@drake" to "UCByOQJjav0CUDwxCk-jVNRQ",
             "@champagnepapi" to "UCByOQJjav0CUDwxCk-jVNRQ",
             "@lanadelrey" to "UCqk3CdGN_j8IR9z4uBbVPSg",
-            "@travisscott" to "UCtxdfwb9wfkoGocVUAJ-Bmg"
+            "@travisscott" to "UCtxdfwb9wfkoGocVUAJ-Bmg",
+            "@sabrinacarpenter" to "UCPKWE1H6xhxwPlqUlKgHb_w",
+            "@oliviarodrigo" to "UCy3zgWom-5AGypGX_FVTKpg",
+            "@sza" to "UCO5IQ70V7l-XpHW40HwaGsw",
+            "@kendricklamar" to "UC3lBXcrKFnFAFkfVk5WuKcQ",
+            "@dualipa" to "UC-J-KZfRV8c13fOCkhXdLiQ",
+            "@postmalone" to "UCeLHszkByNZtPKcaVXOCOQQ",
+            "@justinbieber" to "UCIwFjwMjI0y7PDBVEO9-bkQ",
+            "@ladygaga" to "UCNL1ZadSjHpjm4q9j2sVtOA",
+            "@maroon5" to "UCBVjMGOIkavEAhyqpxJ73Dw",
+            "@adele" to "UCsRM0YB_dabtEPGPTKo-gcw",
+            "@rihanna" to "UCcgqSM4YEo5vVQpqwN-MaNw",
+            "@shawnmendes" to "UCAvCL8hyXjSUHKEGuUPr1BA",
+            "@charlieputh" to "UCwppdrjsBPAZg5_cUwQjfMQ",
+            "@tatemcrae" to "UCQh6LB206jF3JxpCDD-fp5Q",
+            "@jennierubyjane" to "UCNYi_zGmR519r5gYdOKLTjQ",
+            "@roses_are_rosie" to "UCBo1hnzxV9rz3WVsv__Rn1g"
         )
 
+        // 39 live-verified official YouTube channel RSS feeds (zero Indian channels)
         private val VERIFIED_CHANNELS = listOf(
             VerifiedChannel("UCdfq8-581QVUtVsa8ChVnDQ", "Wish 107.5", "PH"),
             VerifiedChannel("UCtOcDBKgyr-f50SgbMErFkQ", "BINI Official", "PH"),
+            VerifiedChannel("UCIWZ1_W5BqsvW9fm1cYFPpQ", "ABS-CBN Star Music", "PH"),
+            VerifiedChannel("UCS09CkK8fjPJ_nHD6fcGMSw", "Viva Records", "PH"),
+            VerifiedChannel("UC9fACMkCC80Lz8aZV--rNwA", "Tarsier Records", "PH"),
+            VerifiedChannel("UCNO66UYt0xSeEMw9d5v-37w", "Nine Degrees North", "PH"),
+            VerifiedChannel("UCm4v7afBTnJKRm4SlfHJzyg", "SB19 Official", "PH"),
+            VerifiedChannel("UCD2HT__OY6xzj-YbnAXJhfA", "Ben&Ben", "PH"),
+            VerifiedChannel("UCPq0kgKjpNzryoNbRp5eUyQ", "Cup of Joe", "PH"),
             VerifiedChannel("UC0WP5P-ufpRfjbNrmOWwLBQ", "The Weeknd", "Global"),
             VerifiedChannel("UCoUM-UJ7rirJYP8CQ0EIaHA", "Bruno Mars", "Global"),
             VerifiedChannel("UCiGm_E4ZwYSHV3bcW1pnSeQ", "Billie Eilish", "Global"),
@@ -983,17 +1070,48 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             VerifiedChannel("UCZFWPqqPkFlNwIxcpsLOwew", "Harry Styles", "Global"),
             VerifiedChannel("UCByOQJjav0CUDwxCk-jVNRQ", "Drake", "Global"),
             VerifiedChannel("UCqk3CdGN_j8IR9z4uBbVPSg", "Lana Del Rey", "Global"),
-            VerifiedChannel("UCtxdfwb9wfkoGocVUAJ-Bmg", "Travis Scott", "Global")
+            VerifiedChannel("UCtxdfwb9wfkoGocVUAJ-Bmg", "Travis Scott", "Global"),
+            VerifiedChannel("UCPKWE1H6xhxwPlqUlKgHb_w", "Sabrina Carpenter", "Global"),
+            VerifiedChannel("UCy3zgWom-5AGypGX_FVTKpg", "Olivia Rodrigo", "Global"),
+            VerifiedChannel("UCO5IQ70V7l-XpHW40HwaGsw", "SZA", "Global"),
+            VerifiedChannel("UC3lBXcrKFnFAFkfVk5WuKcQ", "Kendrick Lamar", "Global"),
+            VerifiedChannel("UC-J-KZfRV8c13fOCkhXdLiQ", "Dua Lipa", "Global"),
+            VerifiedChannel("UCeLHszkByNZtPKcaVXOCOQQ", "Post Malone", "Global"),
+            VerifiedChannel("UCIwFjwMjI0y7PDBVEO9-bkQ", "Justin Bieber", "Global"),
+            VerifiedChannel("UCNL1ZadSjHpjm4q9j2sVtOA", "Lady Gaga", "Global"),
+            VerifiedChannel("UCBVjMGOIkavEAhyqpxJ73Dw", "Maroon 5", "Global"),
+            VerifiedChannel("UCsRM0YB_dabtEPGPTKo-gcw", "Adele", "Global"),
+            VerifiedChannel("UCcgqSM4YEo5vVQpqwN-MaNw", "Rihanna", "Global"),
+            VerifiedChannel("UCAvCL8hyXjSUHKEGuUPr1BA", "Shawn Mendes", "Global"),
+            VerifiedChannel("UCwppdrjsBPAZg5_cUwQjfMQ", "Charlie Puth", "Global"),
+            VerifiedChannel("UCQh6LB206jF3JxpCDD-fp5Q", "Tate McRae", "Global"),
+            VerifiedChannel("UCNYi_zGmR519r5gYdOKLTjQ", "JENNIE", "Global"),
+            VerifiedChannel("UCBo1hnzxV9rz3WVsv__Rn1g", "ROSÉ", "Global"),
+            VerifiedChannel("UC3IZKseVpdzPSBaWxBxundA", "HYBE LABELS", "Global"),
+            VerifiedChannel("UCaO6TYtlC8U5ttz62hTrZgg", "JYP Entertainment", "Global"),
+            VerifiedChannel("UCEf_Bc-KVd7onSeifS3py9g", "SMTOWN", "Global")
         )
 
         private val VERIFIED_CHANNEL_BY_ID = VERIFIED_CHANNELS.associateBy { it.channelId }
-        private val PH_CHANNEL_IDS = setOf("UCdfq8-581QVUtVsa8ChVnDQ", "UCtOcDBKgyr-f50SgbMErFkQ")
+        private val PH_CHANNEL_IDS = setOf(
+            "UCdfq8-581QVUtVsa8ChVnDQ",
+            "UCtOcDBKgyr-f50SgbMErFkQ",
+            "UCIWZ1_W5BqsvW9fm1cYFPpQ",
+            "UCS09CkK8fjPJ_nHD6fcGMSw",
+            "UC9fACMkCC80Lz8aZV--rNwA",
+            "UCNO66UYt0xSeEMw9d5v-37w",
+            "UCm4v7afBTnJKRm4SlfHJzyg",
+            "UCD2HT__OY6xzj-YbnAXJhfA",
+            "UCPq0kgKjpNzryoNbRp5eUyQ"
+        )
         private val FEATURED_GLOBAL_RSS_CHANNEL_IDS = listOf(
             "UC0WP5P-ufpRfjbNrmOWwLBQ",
             "UCoUM-UJ7rirJYP8CQ0EIaHA",
             "UCiGm_E4ZwYSHV3bcW1pnSeQ",
             "UCqECaJ8Gagnn7YCbPEzWH6g",
-            "UCOmHUn--16B90oW2L6FRR3A"
+            "UCOmHUn--16B90oW2L6FRR3A",
+            "UCPKWE1H6xhxwPlqUlKgHb_w",
+            "UCy3zgWom-5AGypGX_FVTKpg"
         )
 
         private val WISH_1075_PACK_VIDEO_IDS = setOf(
@@ -1016,8 +1134,9 @@ class YouTubeCatalogApi(private val client: OkHttpClient = HttpClientProvider.cl
             CuratedMv("D1VaVDm_YP4", "Palagi", "Shanti Dope", "Pinoy Hip-Hop", 210, "Hype", "Official Music Video")
         )
 
-        // Live-oEmbed-verified Global Official MVs (29)
+        // Live-oEmbed-verified Global Official MVs (30, incl. Hong Kong by The Weeknd)
         private val GLOBAL_MV_TRACKS = listOf(
+            CuratedMv("hX9S94XsySk", "Hong Kong (feat. 王菲季候風)", "The Weeknd", "R&B", 305, "Moody", "Official Music Video", "4050205"),
             CuratedMv("4NRXx6U8ABQ", "Blinding Lights", "The Weeknd", "R&B", 202, "Night Drive", "After Hours", "4050205"),
             CuratedMv("kPa7bsKwL-c", "Die With A Smile", "Lady Gaga & Bruno Mars", "Pop", 249, "Romantic", "Official Music Video", "429675"),
             CuratedMv("ekr2nIex040", "APT.", "ROSÉ & Bruno Mars", "Pop", 173, "Upbeat", "rosie", "429675"),
