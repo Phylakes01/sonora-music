@@ -423,7 +423,7 @@ fun FullPlayerSheet(
                 }
             }
 
-            if (track.isPreviewOnly) {
+            if (!playback.isBuffering && track.isPreviewOnly) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

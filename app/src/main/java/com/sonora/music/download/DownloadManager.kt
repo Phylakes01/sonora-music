@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -31,7 +32,7 @@ class DownloadManager(
     private val context: Context,
     private val store: SonoraStore,
     private val client: OkHttpClient = HttpClientProvider.client,
-    private val streamUrlResolver: suspend (Track) -> String = { it.streamUrl }
+    private val trackResolver: suspend (Track) -> Track = { it }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val downloadsDir = File(context.filesDir, "downloads").apply { mkdirs() }
@@ -59,13 +60,14 @@ class DownloadManager(
     fun downloadTrack(track: Track) {
         if (track.isLive ||
             track.source == TrackSource.LOCAL ||
-            (track.streamUrl.isBlank() && track.source != TrackSource.DEEZER)
+            (track.streamUrl.isBlank() && track.source != TrackSource.DEEZER && track.source != TrackSource.ITUNES)
         ) {
             return
         }
         val existingFile = getOfflineFile(track.id)
         if (existingFile != null) {
-            ensureTrackRecorded(track, existingFile)
+            val persisted = _downloadedTracks.value.firstOrNull { it.id == track.id } ?: track
+            ensureTrackRecorded(persisted, existingFile)
             return
         }
         if (activeJobs[track.id]?.isActive == true) {
@@ -143,12 +145,17 @@ class DownloadManager(
         val dest = targetFile(track.id)
         part.delete()
 
-        val resolvedUrl = if (track.source == TrackSource.DEEZER) {
-            val fresh = runCatching { streamUrlResolver(track) }.getOrDefault("")
-            fresh.takeIf { it.startsWith("http", ignoreCase = true) } ?: track.streamUrl
-        } else {
-            track.streamUrl
+        val resolvedTrack = withContext(Dispatchers.IO) {
+            try {
+                trackResolver(track)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                track
+            }
         }
+        val resolvedUrl = resolvedTrack.streamUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+            ?: track.streamUrl
         if (resolvedUrl.isBlank()) {
             throw IOException("Missing stream URL for track ${track.id}")
         }
@@ -213,10 +220,10 @@ class DownloadManager(
             part.delete()
         }
 
-        val recordedTrack = if (resolvedUrl != track.streamUrl) {
-            track.copy(streamUrl = resolvedUrl)
+        val recordedTrack = if (resolvedTrack.streamUrl == resolvedUrl) {
+            resolvedTrack
         } else {
-            track
+            resolvedTrack.copy(streamUrl = resolvedUrl)
         }
         ensureTrackRecorded(recordedTrack, dest)
     }

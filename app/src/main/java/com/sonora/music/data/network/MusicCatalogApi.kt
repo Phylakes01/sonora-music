@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.client) {
 
+    private val fullAudioResolver = FullAudioResolver(client)
     private val deezerSemaphore = Semaphore(4)
     private val rateLimitedUntilMs = AtomicLong(0L)
 
@@ -42,13 +43,35 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                         defaultGenre = "OPM"
                     )
                 }
+                val viralDef = async {
+                    fetchDeezerTracks(
+                        "/playlist/$PL_OPM_VIRAL_HITS/tracks?limit=20",
+                        defaultGenre = "OPM"
+                    )
+                }
+                val tjDef = async {
+                    fetchDeezerTracks("/artist/$ARTIST_TJ_MONTERDE/top?limit=3", defaultGenre = "OPM")
+                }
+                val sunkissedDef = async {
+                    fetchDeezerTracks("/artist/$ARTIST_SUNKISSED_LOLA/top?limit=3", defaultGenre = "OPM")
+                }
                 val appleRssDef = async { fetchApplePhChartEntries() }
 
                 val primaryTracks = primaryDef.await()
+                val viralTracks = viralDef.await()
+                val tjTracks = tjDef.await()
+                val sunkissedTracks = sunkissedDef.await()
                 val appleEntries = appleRssDef.await()
 
+                val anchorTracks = extractFeaturedPhHits(
+                    primaryTracks + viralTracks + tjTracks + sunkissedTracks
+                )
+                val spotlightAndViral = anchorTracks + viralTracks + tjTracks + sunkissedTracks
+
                 val combined = mutableListOf<Track>()
-                combined.addAll(primaryTracks)
+                combined.addAll(
+                    deduplicateTracks(interleaveTrackLists(primaryTracks, spotlightAndViral))
+                )
 
                 if (combined.size < safeLimit && appleEntries.isNotEmpty()) {
                     val seenKeys = combined.mapTo(HashSet()) { normalizedTrackKey(it.title, it.artist) }
@@ -102,18 +125,24 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     )
                 }
                 val artistTrackDefs = OPM_SPOTLIGHT_ARTIST_IDS.map { artistId ->
+                    val artistLimit = if (artistId == ARTIST_DIONELA) 10 else 5
                     async {
                         fetchDeezerTracks(
-                            "/artist/$artistId/top?limit=6",
+                            "/artist/$artistId/top?limit=$artistLimit",
                             defaultGenre = "OPM"
                         )
                     }
                 }
 
                 val playlistTracks = playlistDef.await()
-                val spotlightTracks = artistTrackDefs.awaitAll().flatten()
+                val spotlightLists = artistTrackDefs.awaitAll()
+                val roundRobinSpotlight = roundRobinInterleave(spotlightLists)
+                val anchorTracks = extractFeaturedPhHits(roundRobinSpotlight + playlistTracks)
 
-                val merged = interleaveTrackLists(spotlightTracks, playlistTracks)
+                val merged = interleaveTrackLists(
+                    anchorTracks + roundRobinSpotlight,
+                    playlistTracks
+                )
                 val finalTracks = if (merged.isNotEmpty()) {
                     merged
                 } else {
@@ -386,6 +415,9 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             .map { it.toPlaylist() }
     }
 
+    suspend fun resolvePlayableTrack(track: Track): Track =
+        fullAudioResolver.resolveFullTrack(track) { resolveFreshStreamUrl(track) }
+
     suspend fun resolveFreshStreamUrl(track: Track): String = withContext(Dispatchers.IO) {
         if (track.localUri != null && track.localUri.isNotBlank()) {
             return@withContext track.localUri
@@ -600,7 +632,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             releaseDate = albumObj?.optCleanString("release_date").orEmpty(),
             playCount = obj.optLong("rank", 0L).coerceAtLeast(0L),
             externalUrl = link,
-            isPreviewOnly = true
+            isPreviewOnly = false
         )
     }
 
@@ -639,7 +671,7 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             isSmartPick = false,
             releaseDate = obj.optCleanString("releaseDate").take(10),
             externalUrl = externalUrl,
-            isPreviewOnly = true
+            isPreviewOnly = false
         )
     }
 
@@ -735,6 +767,32 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         rawArtistId == "1228100" -> "K-Pop"
         rawArtistId == "525046" -> "Hip-Hop"
         else -> "Pop"
+    }
+
+    private fun roundRobinInterleave(groups: List<List<Track>>): List<Track> {
+        if (groups.isEmpty()) return emptyList()
+        val maxLen = groups.maxOfOrNull { it.size } ?: 0
+        val out = ArrayList<Track>(groups.sumOf { it.size })
+        for (i in 0 until maxLen) {
+            for (group in groups) {
+                if (i < group.size) out.add(group[i])
+            }
+        }
+        return out
+    }
+
+    private fun extractFeaturedPhHits(pool: List<Track>): List<Track> {
+        if (pool.isEmpty()) return emptyList()
+        return PH_ANCHOR_MATCHERS.mapNotNull { (titleTarget, artistTarget) ->
+            pool.firstOrNull { track ->
+                track.title.lowercase(Locale.ROOT).trim() == titleTarget &&
+                    track.artist.lowercase(Locale.ROOT).contains(artistTarget)
+            } ?: pool.firstOrNull { track ->
+                val t = track.title.lowercase(Locale.ROOT).trim()
+                (t.startsWith("$titleTarget ") || t.startsWith("$titleTarget(")) &&
+                    track.artist.lowercase(Locale.ROOT).contains(artistTarget)
+            }
+        }
     }
 
     private fun interleaveTrackLists(first: List<Track>, second: List<Track>): List<Track> {
@@ -874,7 +932,30 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         private const val CACHE_TTL_MS = 60_000L
         private const val RATE_LIMIT_COOLDOWN_MS = 3_000L
 
-        private val OPM_SPOTLIGHT_ARTIST_IDS = listOf("60687062", "320392011", "69165172", "87317692")
+        private const val ARTIST_CUP_OF_JOE = "60687062"
+        private const val ARTIST_TJ_MONTERDE = "7189292"
+        private const val ARTIST_SUNKISSED_LOLA = "179158087"
+        private const val ARTIST_MAKI = "87317692"
+        private const val ARTIST_DIONELA = "69165172"
+        private const val ARTIST_BINI = "320392011"
+
+        private val OPM_SPOTLIGHT_ARTIST_IDS = listOf(
+            ARTIST_CUP_OF_JOE,
+            ARTIST_TJ_MONTERDE,
+            ARTIST_SUNKISSED_LOLA,
+            ARTIST_MAKI,
+            ARTIST_DIONELA,
+            ARTIST_BINI
+        )
+
+        private val PH_ANCHOR_MATCHERS = listOf(
+            "multo" to "cup of joe",
+            "tingin" to "cup of joe",
+            "dilaw" to "maki",
+            "palagi" to "tj monterde",
+            "pasilyo" to "sunkissed lola",
+            "sining" to "dionela"
+        )
 
         private val CURATED_PH_ARTISTS = listOf(
             CuratedArtistSeed("60687062", "Cup of Joe", "https://cdn-images.dzcdn.net/images/artist/72899d9b602142ed374df10a44e446c9/500x500-000000-80-0-0.jpg", 5537L, "OPM • Baguio"),

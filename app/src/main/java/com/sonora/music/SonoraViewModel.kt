@@ -44,9 +44,11 @@ import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.player.PlaybackController
 import com.sonora.music.ui.theme.EmeraldAccent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,7 +72,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private val downloadManager = DownloadManager(
         context = application,
         store = store,
-        streamUrlResolver = { catalogApi.resolveFreshStreamUrl(it) }
+        trackResolver = { catalogApi.resolvePlayableTrack(it) }
     )
     private val localAudioScanner = LocalAudioScanner(application)
 
@@ -83,7 +85,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         onTrackListened = { track, listenedMs ->
             recordListeningEvent(track, listenedMs)
         },
-        streamUrlResolver = { catalogApi.resolveFreshStreamUrl(it) }
+        trackResolver = { catalogApi.resolvePlayableTrack(it) }
     )
 
     private val _uiState = MutableStateFlow(SonoraUiState())
@@ -92,6 +94,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private var permissionRequester: (() -> Unit)? = null
     private var initialLoadJob: Job? = null
     private var homeJob: Job? = null
+    private var preWarmJob: Job? = null
     private var searchJob: Job? = null
     private var genreJob: Job? = null
     private var detailJob: Job? = null
@@ -178,7 +181,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     artworkUrl = ev.artworkUrl,
                     source = inferredSource,
                     isLive = inferredSource == TrackSource.RADIO,
-                    isPreviewOnly = inferredSource == TrackSource.DEEZER || inferredSource == TrackSource.ITUNES
+                    isPreviewOnly = false
                 )
             }
 
@@ -714,7 +717,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun downloadPlaylist(tracks: List<Track>) {
-        val downloadable = tracks.filter { !it.isLive && (it.streamUrl.isNotBlank() || it.source == TrackSource.DEEZER) }
+        val downloadable = tracks.filter {
+            !it.isLive &&
+                it.source != TrackSource.LOCAL &&
+                (it.streamUrl.isNotBlank() || it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES)
+        }
         if (downloadable.isEmpty()) {
             showSnackbar("No downloadable tracks in this list")
             return
@@ -1362,6 +1369,34 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                             errorMessage = if (allRemoteEmpty) "Offline mode — saved downloads & local tracks ready" else null
                         )
                     )
+                }
+
+                preWarmQuickPicks(quickPicks)
+            }
+        }
+    }
+
+    private fun preWarmQuickPicks(quickPicks: List<Track>) {
+        preWarmJob?.cancel()
+        val targets = quickPicks
+            .filter { it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES }
+            .take(6)
+        if (targets.isEmpty()) return
+
+        preWarmJob = viewModelScope.launch(Dispatchers.IO) {
+            supervisorScope {
+                targets.chunked(2).forEach { chunk ->
+                    chunk.map { track ->
+                        async {
+                            try {
+                                catalogApi.resolvePlayableTrack(track)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                null
+                            }
+                        }
+                    }.awaitAll()
                 }
             }
         }

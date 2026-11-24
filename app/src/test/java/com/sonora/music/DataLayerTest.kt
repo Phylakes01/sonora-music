@@ -2,6 +2,7 @@ package com.sonora.music
 
 import com.sonora.music.data.local.SonoraStore
 import com.sonora.music.data.network.AudiobookApi
+import com.sonora.music.data.network.FullAudioResolver
 import com.sonora.music.data.network.HttpClientProvider
 import com.sonora.music.data.network.LyricsApi
 import com.sonora.music.data.network.MusicCatalogApi
@@ -34,6 +35,7 @@ import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicInteger
 
 class DataLayerTest {
 
@@ -320,7 +322,7 @@ class DataLayerTest {
         val mockClient = createCatalogMockClient()
         val api = MusicCatalogApi(mockClient)
 
-        // 1. Playlist parsing strips dz_pl_ prefix, filters empty preview, sets externalUrl & isPreviewOnly
+        // 1. Playlist parsing strips dz_pl_ prefix, filters empty preview, sets externalUrl & starts with isPreviewOnly=false
         val playlistTracks = api.getPlaylistTracks("dz_pl_15507256221")
         assertEquals(2, playlistTracks.size)
         val first = playlistTracks.first()
@@ -329,18 +331,19 @@ class DataLayerTest {
         assertEquals("Cup of Joe", first.artist)
         assertEquals("60687062", first.artistId)
         assertEquals(TrackSource.DEEZER, first.source)
-        assertTrue(first.isPreviewOnly)
+        assertFalse(first.isPreviewOnly)
         assertEquals("https://www.deezer.com/track/101", first.externalUrl)
         assertEquals("https://cdn.dzcdn.net/cover/101/500x500.jpg", first.artworkUrl)
         assertTrue(playlistTracks.none { it.id == "dz_999" })
 
-        // 2. getPhTopTracks merges Deezer 15507256221 + Apple PH chart enriched via iTunes PH (600x600 artwork upgrade)
+        // 2. getPhTopTracks merges Deezer PH/OPM hits + Apple PH chart enriched via iTunes PH (600x600 artwork upgrade)
         val phTop = api.getPhTopTracks(limit = 10)
-        assertEquals(3, phTop.size)
+        assertEquals(4, phTop.size)
+        assertTrue(phTop.any { it.id == "dz_103" })
         val enrichedItunes = phTop.firstOrNull { it.source == TrackSource.ITUNES }
         assertNotNull(enrichedItunes)
         assertEquals("it_777", enrichedItunes!!.id)
-        assertTrue(enrichedItunes.isPreviewOnly)
+        assertFalse(enrichedItunes.isPreviewOnly)
         assertEquals("https://is1-ssl.mzstatic.com/image/thumb/art/600x600bb.jpg", enrichedItunes.artworkUrl)
 
         // 3. searchTracks falls back to iTunes PH when Deezer returns quota error object
@@ -459,6 +462,468 @@ class DataLayerTest {
         assertEquals(15_000, HttpClientProvider.client.readTimeoutMillis)
         assertTrue(HttpClientProvider.client.followRedirects)
         assertTrue(HttpClientProvider.client.followSslRedirects)
+    }
+
+    @Test
+    fun fullAudioResolver_scoreCandidate_validatesMatchingCleanAndNoiseRules() {
+        val resolver = FullAudioResolver()
+
+        val cleanScore = resolver.scoreCandidate(
+            targetTitle = "Multo",
+            targetArtist = "Cup of Joe",
+            targetDurationSec = 237,
+            candidateTitle = "Multo - Cup of Joe (Official Audio)",
+            candidateUploader = "SUTSU x YGG",
+            candidateDurationSec = 240,
+            isStreamable = true
+        )
+        assertTrue("Clean full song should pass threshold: $cleanScore", cleanScore >= 45)
+
+        val remixScore = resolver.scoreCandidate(
+            targetTitle = "Multo",
+            targetArtist = "Cup of Joe",
+            targetDurationSec = 237,
+            candidateTitle = "Multo (Sped Up Remix)",
+            candidateUploader = "Cup of Joe",
+            candidateDurationSec = 237,
+            isStreamable = true
+        )
+        assertTrue("Clean song ($cleanScore) must outscore remix ($remixScore)", cleanScore > remixScore)
+        assertTrue("Unexpected remix must fall below threshold: $remixScore", remixScore < 45)
+
+        assertEquals(
+            -1000,
+            resolver.scoreCandidate("Multo", "Cup of Joe", 237, "Multo", "Cup of Joe", 237, false)
+        )
+        assertEquals(
+            -1000,
+            resolver.scoreCandidate("Multo", "Cup of Joe", 237, "Multo", "Cup of Joe", 89, true)
+        )
+        assertEquals(
+            -500,
+            resolver.scoreCandidate("ERE", "juan karlos", 285, "Amanecer", "juan karlos", 144, true)
+        )
+        assertEquals(
+            -500,
+            resolver.scoreCandidate("ERE", "juan karlos", 285, "There", "juan karlos", 280, true)
+        )
+
+        val coverScore = resolver.scoreCandidate(
+            targetTitle = "Pasilyo",
+            targetArtist = "SunKissed Lola",
+            targetDurationSec = 269,
+            candidateTitle = "Pasilyo - SunKissed Lola (Jenzen Guino Cover)_256k",
+            candidateUploader = "OPM Music Cover",
+            candidateDurationSec = 261,
+            isStreamable = true
+        )
+        assertTrue("Cover must be rejected: $coverScore", coverScore < 45)
+
+        val accentedScore = resolver.scoreCandidate(
+            targetTitle = "Tingin",
+            targetArtist = "Cup of Joe",
+            targetDurationSec = 221,
+            candidateTitle = "Cup of Joe, Janine Teñoso - Tingin",
+            candidateUploader = "SUTSU x YGG",
+            candidateDurationSec = 221,
+            isStreamable = true
+        )
+        assertTrue("Accented match should pass threshold: $accentedScore", accentedScore >= 45)
+
+        val multiTokenGood = resolver.scoreCandidate(
+            targetTitle = "Cruel Summer",
+            targetArtist = "Taylor Swift",
+            targetDurationSec = 178,
+            candidateTitle = "Cruel Summer (Taylor's Version)",
+            candidateUploader = "Taylor Swift",
+            candidateDurationSec = 178,
+            isStreamable = true
+        )
+        assertTrue(multiTokenGood >= 45)
+
+        val multiTokenLowOverlap = resolver.scoreCandidate(
+            targetTitle = "Cruel Summer",
+            targetArtist = "Taylor Swift",
+            targetDurationSec = 178,
+            candidateTitle = "Cruel World",
+            candidateUploader = "Taylor Swift",
+            candidateDurationSec = 178,
+            isStreamable = true
+        )
+        assertEquals(-500, multiTokenLowOverlap)
+
+        val explicitRemixTarget = resolver.scoreCandidate(
+            targetTitle = "Dilaw (Remix)",
+            targetArtist = "Maki",
+            targetDurationSec = 192,
+            candidateTitle = "Dilaw (Remix)",
+            candidateUploader = "Maki",
+            candidateDurationSec = 192,
+            isStreamable = true
+        )
+        assertTrue(explicitRemixTarget >= 45)
+    }
+
+    @Test
+    fun fullAudioResolver_resolveFullTrack_probesHttp206AndFallsBackOn404() = runTest {
+        val searchRequests = AtomicInteger(0)
+        val probeRequests = AtomicInteger(0)
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                when {
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("Multo") -> {
+                        searchRequests.incrementAndGet()
+                        val body = """
+                            {
+                              "data": [
+                                {
+                                  "id": "aud_remix",
+                                  "title": "Multo (Sped Up)",
+                                  "duration": 237,
+                                  "is_streamable": true,
+                                  "user": { "name": "Cup of Joe", "handle": "cupofjoe" }
+                                },
+                                {
+                                  "id": "aud_clean",
+                                  "title": "Multo - Cup of Joe",
+                                  "duration": 240,
+                                  "is_streamable": true,
+                                  "user": { "name": "SUTSU x YGG", "handle": "sutsu" }
+                                }
+                              ]
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url == "https://api.audius.co/v1/tracks/aud_clean/stream?app_name=Sonora" -> {
+                        probeRequests.incrementAndGet()
+                        assertEquals("bytes=0-63", req.header("Range"))
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(206)
+                            .message("Partial Content")
+                            .header("Content-Type", "audio/mpeg")
+                            .body(ByteArray(64).toResponseBody("audio/mpeg".toMediaType()))
+                            .build()
+                    }
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("ERE") -> {
+                        val body = """
+                            {
+                              "data": [
+                                {
+                                  "id": "aud_amanecer",
+                                  "title": "Amanecer",
+                                  "duration": 144,
+                                  "is_streamable": true,
+                                  "user": { "name": "L.A", "handle": "la" }
+                                }
+                              ]
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("Dilaw") -> {
+                        val body = """
+                            {
+                              "data": [
+                                {
+                                  "id": "aud_404",
+                                  "title": "Maki - Dilaw (Lyrics)",
+                                  "duration": 192,
+                                  "is_streamable": true,
+                                  "user": { "name": "YOWPAR", "handle": "yowpar" }
+                                }
+                              ]
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url == "https://api.audius.co/v1/tracks/aud_404/stream?app_name=Sonora" -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(404)
+                            .message("Not Found")
+                            .body("{}".toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("Sining+Dionela%2C") -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body("""{"data":[]}""".toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("Sining+Dionela") -> {
+                        val body = """
+                            {
+                              "data": [
+                                {
+                                  "id": "aud_sining",
+                                  "title": "Sining - Dionela",
+                                  "duration": 210,
+                                  "is_streamable": true,
+                                  "user": { "name": "Dionela", "handle": "dionela" }
+                                }
+                              ]
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url == "https://api.audius.co/v1/tracks/aud_sining/stream?app_name=Sonora" -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(ByteArray(64).toResponseBody("application/octet-stream".toMediaType()))
+                            .build()
+                    }
+                    else -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(404)
+                            .message("Not Found")
+                            .body("{}".toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                }
+            })
+            .build()
+
+        val resolver = FullAudioResolver(mockClient)
+
+        // 1. HTTP 206 audio/mpeg upgrades preview track to full Audius stream and caches result
+        val multo = Track(
+            id = "dz_101",
+            title = "Multo",
+            artist = "Cup of Joe",
+            durationSec = 237,
+            streamUrl = "https://cdnt-preview.dzcdn.net/101.mp3",
+            source = TrackSource.DEEZER
+        )
+        var fallbackCalls = 0
+        val resolvedMulto = resolver.resolveFullTrack(multo) {
+            fallbackCalls++
+            "https://cdnt-preview.dzcdn.net/fresh/101.mp3"
+        }
+        assertEquals("https://api.audius.co/v1/tracks/aud_clean/stream?app_name=Sonora", resolvedMulto.streamUrl)
+        assertEquals(240, resolvedMulto.durationSec)
+        assertFalse(resolvedMulto.isPreviewOnly)
+        assertEquals(0, fallbackCalls)
+        assertEquals(1, searchRequests.get())
+        assertEquals(1, probeRequests.get())
+
+        val cachedMulto = resolver.resolveFullTrack(multo) {
+            fallbackCalls++
+            "https://cdnt-preview.dzcdn.net/fresh/101.mp3"
+        }
+        assertEquals(resolvedMulto, cachedMulto)
+        assertEquals(1, searchRequests.get())
+        assertEquals(1, probeRequests.get())
+
+        // 2. Rejected candidate ("Amanecer" for "ERE - juan karlos") triggers preview fallback
+        val ere = Track(
+            id = "dz_202",
+            title = "ERE",
+            artist = "juan karlos",
+            durationSec = 285,
+            streamUrl = "https://cdnt-preview.dzcdn.net/202.mp3",
+            source = TrackSource.DEEZER
+        )
+        val resolvedEre = resolver.resolveFullTrack(ere) {
+            "https://cdnt-preview.dzcdn.net/fresh/ere.mp3"
+        }
+        assertEquals("https://cdnt-preview.dzcdn.net/fresh/ere.mp3", resolvedEre.streamUrl)
+        assertTrue(resolvedEre.isPreviewOnly)
+
+        // 3. HTTP 404 on stream probe triggers preview fallback
+        val dilaw = Track(
+            id = "it_303",
+            title = "Dilaw",
+            artist = "Maki",
+            durationSec = 192,
+            streamUrl = "https://audio-ssl.itunes.apple.com/dilaw.m4a",
+            source = TrackSource.ITUNES
+        )
+        val resolvedDilaw = resolver.resolveFullTrack(dilaw) {
+            "https://cdnt-preview.dzcdn.net/fresh/dilaw.mp3"
+        }
+        assertEquals("https://cdnt-preview.dzcdn.net/fresh/dilaw.mp3", resolvedDilaw.streamUrl)
+        assertTrue(resolvedDilaw.isPreviewOnly)
+
+        // 4. Secondary query (clean title + first artist) succeeds when multi-artist query returns empty
+        val sining = Track(
+            id = "dz_404",
+            title = "Sining (Official Video)",
+            artist = "Dionela, Jay R",
+            durationSec = 210,
+            streamUrl = "https://cdnt-preview.dzcdn.net/404.mp3",
+            source = TrackSource.DEEZER
+        )
+        val resolvedSining = resolver.resolveFullTrack(sining) {
+            "https://cdnt-preview.dzcdn.net/fresh/404.mp3"
+        }
+        assertEquals("https://api.audius.co/v1/tracks/aud_sining/stream?app_name=Sonora", resolvedSining.streamUrl)
+        assertFalse(resolvedSining.isPreviewOnly)
+
+        // 5. Bypass sources return track unchanged
+        listOf(
+            TrackSource.LOCAL,
+            TrackSource.PODCAST,
+            TrackSource.AUDIOBOOK,
+            TrackSource.RADIO,
+            TrackSource.AUDIUS
+        ).forEach { src ->
+            val t = Track(
+                id = "bypass_${src.name}",
+                title = "Multo",
+                artist = "Cup of Joe",
+                streamUrl = "https://example.com/${src.name}.mp3",
+                source = src
+            )
+            var called = false
+            val out = resolver.resolveFullTrack(t) {
+                called = true
+                "https://unexpected.example.com"
+            }
+            assertEquals(t, out)
+            assertFalse(called)
+        }
+    }
+
+    @Test
+    fun musicCatalogApi_resolvePlayableTrack_upgradesAndFallsBackCleanly() = runTest {
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                when {
+                    url.startsWith("https://api.audius.co/v1/tracks/search") &&
+                        url.contains("Multo") -> {
+                        val body = """
+                            {
+                              "data": [
+                                {
+                                  "id": "aud_101",
+                                  "title": "Multo - Cup of Joe",
+                                  "duration": 240,
+                                  "is_streamable": true,
+                                  "user": { "name": "SUTSU x YGG", "handle": "sutsu" }
+                                }
+                              ]
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    url == "https://api.audius.co/v1/tracks/aud_101/stream?app_name=Sonora" -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(206)
+                            .message("Partial Content")
+                            .body(ByteArray(64).toResponseBody("audio/mpeg".toMediaType()))
+                            .build()
+                    }
+                    url == "https://api.deezer.com/track/103" -> {
+                        val body = """
+                            {
+                              "id": 103,
+                              "title": "sining",
+                              "preview": "https://cdnt-preview.dzcdn.net/fresh/103.mp3"
+                            }
+                        """.trimIndent()
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(body.toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                    else -> {
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(404)
+                            .message("Not Found")
+                            .body("{}".toResponseBody("application/json".toMediaType()))
+                            .build()
+                    }
+                }
+            })
+            .build()
+
+        val api = MusicCatalogApi(mockClient)
+
+        val resolvedMulto = api.resolvePlayableTrack(
+            Track(
+                id = "dz_101",
+                title = "Multo",
+                artist = "Cup of Joe",
+                durationSec = 238,
+                streamUrl = "https://cdnt-preview.dzcdn.net/101.mp3",
+                source = TrackSource.DEEZER,
+                isPreviewOnly = false
+            )
+        )
+        assertEquals("https://api.audius.co/v1/tracks/aud_101/stream?app_name=Sonora", resolvedMulto.streamUrl)
+        assertFalse(resolvedMulto.isPreviewOnly)
+
+        val resolvedSining = api.resolvePlayableTrack(
+            Track(
+                id = "dz_103",
+                title = "sining",
+                artist = "Dionela",
+                durationSec = 210,
+                streamUrl = "https://cdnt-preview.dzcdn.net/103.mp3",
+                source = TrackSource.DEEZER,
+                isPreviewOnly = false
+            )
+        )
+        assertEquals("https://cdnt-preview.dzcdn.net/fresh/103.mp3", resolvedSining.streamUrl)
+        assertTrue(resolvedSining.isPreviewOnly)
     }
 
     private fun createCatalogMockClient(): OkHttpClient {

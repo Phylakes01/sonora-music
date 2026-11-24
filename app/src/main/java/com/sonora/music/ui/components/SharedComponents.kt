@@ -589,10 +589,11 @@ fun TrackRow(
         }
     }
 
-    val subtitleText = remember(track.id, track.artist, track.isPreviewOnly, track.isLive, track.source) {
+    val isDownloaded = downloadState?.status == DownloadStatus.DOWNLOADED
+    val subtitleText = remember(track.id, track.artist, track.isLive, track.source, isDownloaded) {
         when {
             track.isLive || track.source == TrackSource.RADIO -> "LIVE • ${track.displayArtist}"
-            track.isPreviewOnly -> "Preview • ${track.displayArtist}"
+            isDownloaded -> "Offline • ${track.displayArtist}"
             else -> track.displayArtist
         }
     }
@@ -888,12 +889,11 @@ fun TrackActionSheet(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (track.isPreviewOnly) {
-                            "Preview • ${track.displayArtist}"
-                        } else if (track.isLive) {
-                            "LIVE • ${track.displayArtist}"
-                        } else {
-                            track.displayArtist
+                        text = when {
+                            track.isLive || track.source == TrackSource.RADIO -> "LIVE • ${track.displayArtist}"
+                            downloadState?.status == DownloadStatus.DOWNLOADED -> "Offline • ${track.displayArtist}"
+                            track.isPreviewOnly -> "30s Preview • ${track.displayArtist}"
+                            else -> track.displayArtist
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary,
@@ -907,11 +907,15 @@ fun TrackActionSheet(
             HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
             Spacer(modifier = Modifier.height(6.dp))
 
-            if (track.isPreviewOnly) {
+            if (!track.isLive &&
+                track.source != TrackSource.LOCAL &&
+                track.source != TrackSource.PODCAST &&
+                track.source != TrackSource.AUDIOBOOK
+            ) {
                 SheetActionItem(
                     icon = Icons.AutoMirrored.Rounded.OpenInNew,
                     label = "Open Full Song",
-                    tint = EmeraldAccent,
+                    tint = if (track.isPreviewOnly) EmeraldAccent else TextPrimary,
                     onClick = {
                         onOpenFullTrack()
                         onDismiss()
