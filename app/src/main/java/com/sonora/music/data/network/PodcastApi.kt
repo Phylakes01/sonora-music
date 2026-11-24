@@ -14,12 +14,18 @@ import java.io.StringReader
 
 class PodcastApi(private val client: OkHttpClient = HttpClientProvider.client) {
 
-    suspend fun searchPodcasts(query: String, limit: Int = 20): List<PodcastShow> =
+    suspend fun searchPodcasts(
+        query: String,
+        limit: Int = 20,
+        country: String = "PH"
+    ): List<PodcastShow> =
         withContext(Dispatchers.IO) {
             val trimmed = query.trim()
             if (trimmed.isEmpty()) return@withContext emptyList()
             val safeLimit = limit.coerceIn(1, 50)
-            val url = "$ITUNES_SEARCH_URL?media=podcast&term=${encodeUrlParam(trimmed)}&limit=$safeLimit"
+            val cleanCountry = country.trim().uppercase().takeIf { it.isNotEmpty() }
+            val countryParam = cleanCountry?.let { "&country=${encodeUrlParam(it)}" }.orEmpty()
+            val url = "$ITUNES_SEARCH_URL?media=podcast&term=${encodeUrlParam(trimmed)}&limit=$safeLimit$countryParam"
             val body = client.getText(url) ?: return@withContext emptyList()
 
             try {

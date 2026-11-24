@@ -19,6 +19,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -41,11 +43,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -84,6 +88,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +102,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -115,7 +121,6 @@ import com.sonora.music.model.Playlist
 import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.ui.theme.CyanGlow
-import com.sonora.music.ui.theme.CoralHeart
 import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.LocalSonoraAccent
 import com.sonora.music.ui.theme.ObsidianBg
@@ -128,25 +133,21 @@ import com.sonora.music.ui.theme.PlaylistCoverPalettes
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
-import com.sonora.music.ui.theme.VioletPulse
 import kotlin.math.abs
 import kotlin.math.sin
 import kotlinx.coroutines.delay
 
 fun Modifier.sonoraPressable(
     enabled: Boolean = true,
-    pressedScale: Float = 0.965f,
-    shape: Shape = RoundedCornerShape(14.dp),
+    pressedScale: Float = 0.97f,
+    shape: Shape = RoundedCornerShape(10.dp),
     onClick: () -> Unit
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled) pressedScale else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
+        animationSpec = tween(durationMillis = 100),
         label = "sonora_press_scale"
     )
     this
@@ -178,13 +179,11 @@ fun rememberSonoraShimmerBrush(): Brush {
     return Brush.linearGradient(
         colors = listOf(
             ObsidianCard,
-            ObsidianCardElevated.copy(alpha = 0.95f),
-            Color(0xFF283246),
-            ObsidianCardElevated.copy(alpha = 0.95f),
+            ObsidianCardElevated,
             ObsidianCard
         ),
-        start = Offset(translate, translate * 0.4f),
-        end = Offset(translate + 340f, translate * 0.4f + 220f)
+        start = Offset(translate, translate * 0.35f),
+        end = Offset(translate + 340f, translate * 0.35f + 220f)
     )
 }
 
@@ -194,32 +193,114 @@ fun SonoraAmbientBackdrop(
     secondaryColor: Color = CyanGlow,
     modifier: Modifier = Modifier
 ) {
-    Canvas(modifier = modifier.fillMaxSize()) {
-        drawRect(color = ObsidianBg)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    accentColor.copy(alpha = 0.19f),
-                    accentColor.copy(alpha = 0.06f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.16f, size.height * 0.08f),
-                radius = size.maxDimension * 0.56f
-            ),
-            radius = size.maxDimension * 0.56f,
-            center = Offset(size.width * 0.16f, size.height * 0.08f)
+    // Plain matte charcoal backdrop — zero glowing blobs
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(ObsidianBg)
+    )
+}
+
+@Composable
+fun SonoraSlimSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    activeColor: Color = Color.White,
+    inactiveColor: Color = Color(0xFF4D4D4D),
+    modifier: Modifier = Modifier
+) {
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentRange by rememberUpdatedState(valueRange)
+    var isDragging by remember { mutableStateOf(false) }
+
+    val start = currentRange.start
+    val end = currentRange.endInclusive
+    val span = (end - start).takeIf { it > 0f } ?: 1f
+    val normalized = ((value - start) / span).coerceIn(0f, 1f)
+
+    val thumbRadiusDp = if (isDragging) 6.5.dp else 5.5.dp
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .pointerInput(Unit) {
+                val touchSlop = viewConfiguration.touchSlop
+                val thumbRadPx = 5.5.dp.toPx()
+
+                fun xToValue(x: Float): Float {
+                    val s = currentRange.start
+                    val e = currentRange.endInclusive
+                    val sp = e - s
+                    if (sp <= 0f || size.width <= 0) return s
+                    val usable = (size.width - thumbRadPx * 2f).coerceAtLeast(1f)
+                    val frac = ((x - thumbRadPx) / usable).coerceIn(0f, 1f)
+                    return s + frac * sp
+                }
+
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var dragging = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (!dragging) {
+                                currentOnValueChange(xToValue(change.position.x))
+                            }
+                            isDragging = false
+                            break
+                        }
+                        val dx = abs(change.position.x - down.position.x)
+                        val dy = abs(change.position.y - down.position.y)
+                        if (!dragging) {
+                            if (dx > touchSlop && dx >= dy) {
+                                dragging = true
+                                isDragging = true
+                                change.consume()
+                                currentOnValueChange(xToValue(change.position.x))
+                            } else if (dy > touchSlop && dy > dx) {
+                                isDragging = false
+                                break
+                            }
+                        } else {
+                            change.consume()
+                            currentOnValueChange(xToValue(change.position.x))
+                        }
+                    }
+                }
+            }
+    ) {
+        val trackHeight = 3.dp.toPx()
+        val thumbRadius = thumbRadiusDp.toPx()
+        val leftPad = 5.5.dp.toPx()
+        val rightPad = size.width - leftPad
+        val usableWidth = (rightPad - leftPad).coerceAtLeast(1f)
+        val centerY = size.height / 2f
+        val thumbX = leftPad + normalized * usableWidth
+
+        drawRoundRect(
+            color = inactiveColor,
+            topLeft = Offset(leftPad, centerY - trackHeight / 2f),
+            size = Size(usableWidth, trackHeight),
+            cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
         )
+
+        val activeWidth = (thumbX - leftPad).coerceAtLeast(0f)
+        if (activeWidth > 0f) {
+            drawRoundRect(
+                color = activeColor,
+                topLeft = Offset(leftPad, centerY - trackHeight / 2f),
+                size = Size(activeWidth, trackHeight),
+                cornerRadius = CornerRadius(trackHeight / 2f, trackHeight / 2f)
+            )
+        }
+
         drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    secondaryColor.copy(alpha = 0.12f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.88f, size.height * 0.22f),
-                radius = size.maxDimension * 0.44f
-            ),
-            radius = size.maxDimension * 0.44f,
-            center = Offset(size.width * 0.88f, size.height * 0.22f)
+            color = activeColor,
+            radius = thumbRadius,
+            center = Offset(thumbX, centerY)
         )
     }
 }
@@ -235,12 +316,15 @@ fun SonoraSectionHeader(
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                ),
                 color = TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -260,11 +344,11 @@ fun SonoraSectionHeader(
             Text(
                 text = actionLabel,
                 style = MaterialTheme.typography.labelLarge,
-                color = LocalSonoraAccent.current,
+                color = TextSecondary,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
                     .clickable(onClick = onActionClick)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
     }
@@ -275,33 +359,23 @@ fun SonoraPillChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
-    accentColor: Color = LocalSonoraAccent.current,
+    accentColor: Color = EmeraldAccent,
     leadingIcon: ImageVector? = null,
     modifier: Modifier = Modifier
 ) {
     val bgColor by animateColorAsState(
-        targetValue = if (selected) accentColor.copy(alpha = 0.20f) else ObsidianCard,
-        animationSpec = tween(220),
+        targetValue = if (selected) accentColor else ObsidianCard,
+        animationSpec = tween(160),
         label = "chip_bg"
     )
-    val borderColor by animateColorAsState(
-        targetValue = if (selected) accentColor.copy(alpha = 0.72f) else ObsidianStrokeSoft,
-        animationSpec = tween(220),
-        label = "chip_border"
-    )
-    val contentColor by animateColorAsState(
-        targetValue = if (selected) accentColor else TextSecondary,
-        animationSpec = tween(220),
-        label = "chip_content"
-    )
+    val contentColor = if (selected) Color.Black else TextPrimary
     Surface(
         shape = CircleShape,
         color = bgColor,
-        border = BorderStroke(1.dp, borderColor),
-        modifier = modifier.sonoraPressable(shape = CircleShape, pressedScale = 0.94f, onClick = onClick)
+        modifier = modifier.sonoraPressable(shape = CircleShape, pressedScale = 0.96f, onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -315,8 +389,10 @@ fun SonoraPillChip(
             }
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) TextPrimary else TextSecondary,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = contentColor,
                 maxLines = 1
             )
         }
@@ -330,19 +406,18 @@ fun SonoraBadge(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = tint.copy(alpha = 0.16f),
-        border = BorderStroke(0.75.dp, tint.copy(alpha = 0.42f)),
+        shape = RoundedCornerShape(4.dp),
+        color = ObsidianCard,
         modifier = modifier
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.4.sp
             ),
-            color = tint,
+            color = TextSecondary,
             maxLines = 1,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         )
@@ -373,71 +448,53 @@ fun SonoraArtwork(
     artworkUrl: String?,
     title: String,
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 12.dp,
+    cornerRadius: Dp = 8.dp,
     colorStart: Long = 0xFF1ED760L,
     colorEnd: Long = 0xFF0A2E2AL,
     isCircle: Boolean = false,
     showVinylHole: Boolean = false
 ) {
     val shape: Shape = if (isCircle) CircleShape else RoundedCornerShape(cornerRadius)
-    val resolvedPalette = remember(title, colorStart, colorEnd) {
-        val isDefault = colorStart == 0xFF1ED760L && colorEnd == 0xFF0A2E2AL
-        if (isDefault && title.isNotBlank()) {
-            val idx = abs(title.hashCode()) % PlaylistCoverPalettes.size
-            PlaylistCoverPalettes[idx]
-        } else {
-            colorStart to colorEnd
-        }
-    }
+    val hasExplicitCustomPalette = colorStart != 0xFF1ED760L || colorEnd != 0xFF0A2E2AL
     var imageFailed by remember(artworkUrl) { mutableStateOf(false) }
+    val showImage = !artworkUrl.isNullOrBlank() && !imageFailed
     val monogram = remember(title) { extractMonogram(title) }
     val context = LocalContext.current
+
+    val fallbackBg = if (hasExplicitCustomPalette) {
+        Brush.verticalGradient(listOf(Color(colorStart), Color(colorEnd)))
+    } else {
+        Brush.verticalGradient(listOf(ObsidianCardElevated, ObsidianCard))
+    }
 
     Box(
         modifier = modifier
             .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color(resolvedPalette.first),
-                        Color(resolvedPalette.second)
-                    )
-                )
-            )
-            .border(1.dp, ObsidianStrokeSoft, shape),
+            .background(ObsidianCard),
         contentAlignment = Alignment.Center
     ) {
-        // Subtle diagonal sheen & monogram fallback underneath Coil image
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0.14f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.34f)
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = monogram,
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.8.sp
-                ),
-                color = Color.White.copy(alpha = 0.90f),
-                maxLines = 1
-            )
-        }
-
-        if (!artworkUrl.isNullOrBlank() && !imageFailed) {
+        if (!showImage) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(fallbackBg),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = monogram,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = TextSecondary,
+                    maxLines = 1
+                )
+            }
+        } else {
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(artworkUrl)
-                    .crossfade(280)
+                    .crossfade(200)
                     .build(),
                 contentDescription = title,
                 contentScale = ContentScale.Crop,
@@ -449,20 +506,11 @@ fun SonoraArtwork(
         if (showVinylHole) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize(0.30f)
+                    .fillMaxSize(0.28f)
                     .clip(CircleShape)
-                    .background(ObsidianBg.copy(alpha = 0.92f))
-                    .border(2.dp, Color.White.copy(alpha = 0.24f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize(0.38f)
-                        .clip(CircleShape)
-                        .background(ObsidianSurface)
-                        .border(1.dp, ObsidianStroke, CircleShape)
-                )
-            }
+                    .background(ObsidianBg)
+                    .border(1.dp, ObsidianStroke, CircleShape)
+            )
         }
     }
 }
@@ -470,7 +518,7 @@ fun SonoraArtwork(
 @Composable
 fun AnimatedPlayingBars(
     isPlaying: Boolean,
-    color: Color = LocalSonoraAccent.current,
+    color: Color = EmeraldAccent,
     modifier: Modifier = Modifier
 ) {
     val infinite = rememberInfiniteTransition(label = "eq_bars")
@@ -478,26 +526,26 @@ fun AnimatedPlayingBars(
         initialValue = 0f,
         targetValue = (2f * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1050, easing = LinearEasing),
+            animation = tween(durationMillis = 1000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "eq_phase"
     )
     val idleScale by animateFloatAsState(
         targetValue = if (isPlaying) 1f else 0.25f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        animationSpec = tween(durationMillis = 200),
         label = "eq_idle"
     )
 
-    Canvas(modifier = modifier.size(18.dp)) {
-        val barCount = 4
-        val gap = size.width * 0.11f
+    Canvas(modifier = modifier.size(16.dp)) {
+        val barCount = 3
+        val gap = size.width * 0.14f
         val barWidth = (size.width - gap * (barCount - 1)) / barCount
-        val phases = floatArrayOf(0f, 1.4f, 2.7f, 0.9f)
-        val speeds = floatArrayOf(1f, 1.3f, 0.85f, 1.15f)
+        val phases = floatArrayOf(0f, 1.8f, 3.1f)
+        val speeds = floatArrayOf(1f, 1.35f, 0.9f)
         for (i in 0 until barCount) {
             val raw = (sin((phase * speeds[i] + phases[i]).toDouble()).toFloat() + 1f) * 0.5f
-            val fraction = (0.20f + raw * 0.80f * idleScale).coerceIn(0.18f, 1f)
+            val fraction = (0.22f + raw * 0.78f * idleScale).coerceIn(0.20f, 1f)
             val barHeight = size.height * fraction
             val left = i * (barWidth + gap)
             drawRoundRect(
@@ -525,208 +573,191 @@ fun TrackRow(
     modifier: Modifier = Modifier,
     trailingContent: (@Composable () -> Unit)? = null
 ) {
-    val accent = LocalSonoraAccent.current
-    val rowBg by animateColorAsState(
-        targetValue = if (isCurrent) accent.copy(alpha = 0.11f) else Color.Transparent,
-        animationSpec = tween(250),
-        label = "track_row_bg"
-    )
-    val borderStroke = if (isCurrent) BorderStroke(1.dp, accent.copy(alpha = 0.35f)) else null
-
     var heartBurstTrigger by remember { mutableIntStateOf(0) }
     val heartScale by animateFloatAsState(
-        targetValue = if (heartBurstTrigger > 0) 1.32f else 1f,
+        targetValue = if (heartBurstTrigger > 0) 1.2f else 1f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioHighBouncy,
+            dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = "heart_scale"
     )
     LaunchedEffect(heartBurstTrigger) {
         if (heartBurstTrigger > 0) {
-            delay(180)
+            delay(150)
             heartBurstTrigger = 0
         }
     }
 
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = rowBg,
-        border = borderStroke,
+    val subtitleText = remember(track.id, track.artist, track.isPreviewOnly, track.isLive, track.source) {
+        when {
+            track.isLive || track.source == TrackSource.RADIO -> "LIVE • ${track.displayArtist}"
+            track.isPreviewOnly -> "Preview • ${track.displayArtist}"
+            else -> track.displayArtist
+        }
+    }
+
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .sonoraPressable(shape = RoundedCornerShape(14.dp), pressedScale = 0.985f, onClick = onClick)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (index != null) {
+        if (index != null) {
+            Box(
+                modifier = Modifier.width(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isCurrent) {
+                    AnimatedPlayingBars(isPlaying = isPlaying, color = EmeraldAccent)
+                } else {
+                    Text(
+                        text = index.toString(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                        maxLines = 1
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+        }
+
+        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            SonoraArtwork(
+                artworkUrl = track.artworkUrl,
+                title = track.title,
+                cornerRadius = 4.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+            if (isCurrent && index == null) {
                 Box(
-                    modifier = Modifier.width(26.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.55f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isCurrent) {
-                        AnimatedPlayingBars(isPlaying = isPlaying, color = accent)
-                    } else {
-                        Text(
-                            text = index.toString(),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = TextMuted,
-                            maxLines = 1
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-            }
-
-            Box(modifier = Modifier.size(50.dp), contentAlignment = Alignment.Center) {
-                SonoraArtwork(
-                    artworkUrl = track.artworkUrl,
-                    title = track.title,
-                    cornerRadius = 10.dp,
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (isCurrent && index == null) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color.Black.copy(alpha = 0.56f))
-                            .border(1.2.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(10.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AnimatedPlayingBars(isPlaying = isPlaying, color = accent)
-                    }
+                    AnimatedPlayingBars(isPlaying = isPlaying, color = EmeraldAccent)
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = track.title.ifBlank { "Untitled Track" },
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Medium
+                ),
+                color = if (isCurrent) EmeraldAccent else TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                if (downloadState?.status == DownloadStatus.DOWNLOADED) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = "Downloaded",
+                        tint = EmeraldAccent,
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
                 Text(
-                    text = track.title.ifBlank { "Untitled Track" },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (isCurrent) accent else TextPrimary,
+                    text = subtitleText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(3.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = buildString {
-                            append(track.displayArtist)
-                            if (track.durationSec > 0 && !track.isLive) {
-                                append(" • ")
-                                append(track.formattedDuration)
-                            }
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (downloadState?.status == DownloadStatus.DOWNLOADED) {
-                        SonoraBadge(text = "OFFLINE", tint = EmeraldAccent)
+            }
+        }
+
+        if (!track.isLive && track.source != TrackSource.LOCAL) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onDownloadClick),
+                contentAlignment = Alignment.Center
+            ) {
+                when (downloadState?.status) {
+                    DownloadStatus.DOWNLOADING -> {
+                        CircularProgressIndicator(
+                            progress = { downloadState.progress.coerceIn(0.08f, 1f) },
+                            modifier = Modifier.size(16.dp),
+                            color = EmeraldAccent,
+                            trackColor = ObsidianStroke,
+                            strokeWidth = 2.dp
+                        )
                     }
-                    if (track.isLive || track.source == TrackSource.RADIO) {
-                        SonoraBadge(text = "LIVE", tint = CoralHeart)
-                    } else if (track.source == TrackSource.LOCAL) {
-                        SonoraBadge(text = "LOCAL", tint = CyanGlow)
+                    DownloadStatus.DOWNLOADED -> {
+                        Icon(
+                            imageVector = Icons.Rounded.DownloadDone,
+                            contentDescription = "Downloaded",
+                            tint = EmeraldAccent,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
-                    if (track.isSmartPick) {
-                        SonoraBadge(text = "✦ Smart Pick", tint = VioletPulse)
+                    DownloadStatus.FAILED -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Retry download",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    else -> {
+                        Icon(
+                            imageVector = Icons.Rounded.DownloadForOffline,
+                            contentDescription = "Download offline",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }
+        }
 
-            if (!track.isLive && track.source != TrackSource.LOCAL) {
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onDownloadClick),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when (downloadState?.status) {
-                        DownloadStatus.DOWNLOADING -> {
-                            CircularProgressIndicator(
-                                progress = { downloadState.progress.coerceIn(0.08f, 1f) },
-                                modifier = Modifier.size(18.dp),
-                                color = accent,
-                                trackColor = ObsidianStrokeSoft,
-                                strokeWidth = 2.2.dp
-                            )
-                        }
-                        DownloadStatus.DOWNLOADED -> {
-                            Icon(
-                                imageVector = Icons.Rounded.DownloadDone,
-                                contentDescription = "Downloaded",
-                                tint = EmeraldAccent,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                        DownloadStatus.FAILED -> {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = "Retry download",
-                                tint = CoralHeart,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                        else -> {
-                            Icon(
-                                imageVector = Icons.Rounded.DownloadForOffline,
-                                contentDescription = "Download offline",
-                                tint = TextMuted,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
+        IconButton(
+            onClick = {
+                heartBurstTrigger++
+                onLikeClick()
+            },
+            modifier = Modifier.size(34.dp)
+        ) {
+            Icon(
+                imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = if (isLiked) "Unlike" else "Like",
+                tint = if (isLiked) EmeraldAccent else TextMuted,
+                modifier = Modifier
+                    .size(19.dp)
+                    .graphicsLayer {
+                        scaleX = heartScale
+                        scaleY = heartScale
                     }
-                }
-            }
+            )
+        }
 
-            IconButton(
-                onClick = {
-                    heartBurstTrigger++
-                    onLikeClick()
-                },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = if (isLiked) "Unlike" else "Like",
-                    tint = if (isLiked) CoralHeart else TextMuted,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .graphicsLayer {
-                            scaleX = heartScale
-                            scaleY = heartScale
-                        }
-                )
-            }
+        if (trailingContent != null) {
+            trailingContent()
+        }
 
-            if (trailingContent != null) {
-                trailingContent()
-            }
-
-            IconButton(
-                onClick = onMoreClick,
-                modifier = Modifier.size(34.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = "Track options",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+        IconButton(
+            onClick = onMoreClick,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "Track options",
+                tint = TextSecondary,
+                modifier = Modifier.size(19.dp)
+            )
         }
     }
 }
@@ -737,39 +768,32 @@ fun ShimmerRowPlaceholder() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(50.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(48.dp)
+                .clip(RoundedCornerShape(4.dp))
                 .background(brush)
         )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.68f)
+                    .fillMaxWidth(0.66f)
                     .height(14.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(brush)
             )
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.44f)
+                    .fillMaxWidth(0.42f)
                     .height(11.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(4.dp))
                     .background(brush)
             )
         }
-        Spacer(modifier = Modifier.width(12.dp))
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(brush)
-        )
     }
 }
 
@@ -777,27 +801,27 @@ fun ShimmerRowPlaceholder() {
 fun ShimmerCardPlaceholder() {
     val brush = rememberSonoraShimmerBrush()
     Column(
-        modifier = Modifier.width(152.dp),
+        modifier = Modifier.width(144.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(152.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .size(144.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(brush)
         )
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.82f)
-                .height(14.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .fillMaxWidth(0.80f)
+                .height(13.dp)
+                .clip(RoundedCornerShape(4.dp))
                 .background(brush)
         )
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.55f)
+                .fillMaxWidth(0.52f)
                 .height(11.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .clip(RoundedCornerShape(4.dp))
                 .background(brush)
         )
     }
@@ -816,10 +840,10 @@ fun TrackActionSheet(
     onStartRadio: () -> Unit,
     onDownloadToggle: () -> Unit,
     onGoToArtist: () -> Unit,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    onOpenFullTrack: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val accent = LocalSonoraAccent.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -829,7 +853,7 @@ fun TrackActionSheet(
             Box(
                 modifier = Modifier
                     .padding(top = 12.dp, bottom = 6.dp)
-                    .width(40.dp)
+                    .width(36.dp)
                     .height(4.dp)
                     .clip(CircleShape)
                     .background(ObsidianStroke)
@@ -850,10 +874,10 @@ fun TrackActionSheet(
                 SonoraArtwork(
                     artworkUrl = track.artworkUrl,
                     title = track.title,
-                    cornerRadius = 12.dp,
-                    modifier = Modifier.size(56.dp)
+                    cornerRadius = 4.dp,
+                    modifier = Modifier.size(52.dp)
                 )
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = track.title,
@@ -862,35 +886,42 @@ fun TrackActionSheet(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = track.displayArtist,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        SonoraBadge(
-                            text = track.source.badgeLabel,
-                            tint = if (track.isLive) CoralHeart else accent
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (track.isPreviewOnly) {
+                            "Preview • ${track.displayArtist}"
+                        } else if (track.isLive) {
+                            "LIVE • ${track.displayArtist}"
+                        } else {
+                            track.displayArtist
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider(color = ObsidianStrokeSoft)
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
+            Spacer(modifier = Modifier.height(6.dp))
+
+            if (track.isPreviewOnly) {
+                SheetActionItem(
+                    icon = Icons.AutoMirrored.Rounded.OpenInNew,
+                    label = "Open Full Song",
+                    tint = EmeraldAccent,
+                    onClick = {
+                        onOpenFullTrack()
+                        onDismiss()
+                    }
+                )
+            }
 
             SheetActionItem(
                 icon = Icons.AutoMirrored.Rounded.PlaylistPlay,
                 label = "Play Next",
-                tint = accent,
                 onClick = {
                     onPlayNext()
                     onDismiss()
@@ -915,7 +946,6 @@ fun TrackActionSheet(
             SheetActionItem(
                 icon = Icons.Rounded.Radio,
                 label = "Start Track Radio",
-                tint = CyanGlow,
                 onClick = {
                     onStartRadio()
                     onDismiss()
@@ -926,16 +956,13 @@ fun TrackActionSheet(
                 val isDownloaded = downloadState?.status == DownloadStatus.DOWNLOADED
                 val isDownloading = downloadState?.status == DownloadStatus.DOWNLOADING
                 SheetActionItem(
-                    icon = when {
-                        isDownloaded -> Icons.Rounded.DeleteOutline
-                        else -> Icons.Rounded.DownloadForOffline
-                    },
+                    icon = if (isDownloaded) Icons.Rounded.DeleteOutline else Icons.Rounded.DownloadForOffline,
                     label = when {
-                        isDownloaded -> "Remove Offline Download"
+                        isDownloaded -> "Remove Download"
                         isDownloading -> "Downloading (${(downloadState.progress * 100).toInt()}%)"
-                        else -> "Download for Offline"
+                        else -> "Download"
                     },
-                    tint = if (isDownloaded) CoralHeart else EmeraldAccent,
+                    tint = if (isDownloaded) EmeraldAccent else TextPrimary,
                     onClick = {
                         onDownloadToggle()
                         onDismiss()
@@ -956,7 +983,7 @@ fun TrackActionSheet(
 
             SheetActionItem(
                 icon = Icons.Rounded.Share,
-                label = if (isLiked) "Share Liked Track" else "Share Track",
+                label = if (isLiked) "Share Liked Track" else "Share",
                 onClick = {
                     onDismiss()
                     onShare()
@@ -976,9 +1003,9 @@ private fun SheetActionItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 13.dp),
+            .padding(horizontal = 4.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -1010,14 +1037,13 @@ fun CreatePlaylistDialog(
     var description by remember(initialDescription) { mutableStateOf(initialDescription) }
     var selectedPaletteIndex by remember { mutableIntStateOf(0) }
     val selectedPalette = PlaylistCoverPalettes[selectedPaletteIndex]
-    val accent = LocalSonoraAccent.current
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(16.dp),
             color = ObsidianSurface,
             border = BorderStroke(1.dp, ObsidianStroke),
             modifier = Modifier
@@ -1032,48 +1058,32 @@ fun CreatePlaylistDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = if (isEditMode) "Edit Playlist" else "Create Playlist",
+                    text = if (isEditMode) "Edit Playlist" else "New Playlist",
                     style = MaterialTheme.typography.headlineSmall,
                     color = TextPrimary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Unlimited playlists • Free forever",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
                 SonoraArtwork(
                     artworkUrl = null,
-                    title = name.ifBlank { "New Mix" },
-                    cornerRadius = 18.dp,
+                    title = name.ifBlank { "Playlist" },
+                    cornerRadius = 8.dp,
                     colorStart = selectedPalette.first,
                     colorEnd = selectedPalette.second,
-                    modifier = Modifier.size(104.dp)
+                    modifier = Modifier.size(96.dp)
                 )
 
                 if (!isEditMode) {
                     Spacer(modifier = Modifier.height(16.dp))
-
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         PlaylistCoverPalettes.forEachIndexed { index, pair ->
                             val isSelected = index == selectedPaletteIndex
-                            val swatchScale by animateFloatAsState(
-                                targetValue = if (isSelected) 1.18f else 1f,
-                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                                label = "palette_scale"
-                            )
                             Box(
                                 modifier = Modifier
-                                    .size(32.dp)
-                                    .graphicsLayer {
-                                        scaleX = swatchScale
-                                        scaleY = swatchScale
-                                    }
+                                    .size(28.dp)
                                     .clip(CircleShape)
                                     .background(
                                         Brush.linearGradient(
@@ -1081,7 +1091,7 @@ fun CreatePlaylistDialog(
                                         )
                                     )
                                     .border(
-                                        width = if (isSelected) 2.5.dp else 1.dp,
+                                        width = if (isSelected) 2.dp else 1.dp,
                                         color = if (isSelected) TextPrimary else ObsidianStroke,
                                         shape = CircleShape
                                     )
@@ -1091,9 +1101,9 @@ fun CreatePlaylistDialog(
                                 if (isSelected) {
                                     Icon(
                                         imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Selected palette",
+                                        contentDescription = "Selected cover",
                                         tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
@@ -1107,17 +1117,17 @@ fun CreatePlaylistDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Playlist name") },
-                    placeholder = { Text("Late Night Obsidian") },
+                    placeholder = { Text("My Playlist") },
                     singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = accent,
+                        focusedBorderColor = TextPrimary,
                         unfocusedBorderColor = ObsidianStroke,
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
-                        focusedLabelColor = accent,
+                        focusedLabelColor = TextPrimary,
                         unfocusedLabelColor = TextSecondary,
-                        cursorColor = accent
+                        cursorColor = EmeraldAccent
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1128,17 +1138,17 @@ fun CreatePlaylistDialog(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("Description (optional)") },
-                    placeholder = { Text("Deep synths, dark basslines & night drives") },
+                    placeholder = { Text("Add a description") },
                     maxLines = 3,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = accent,
+                        focusedBorderColor = TextPrimary,
                         unfocusedBorderColor = ObsidianStroke,
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
-                        focusedLabelColor = accent,
+                        focusedLabelColor = TextPrimary,
                         unfocusedLabelColor = TextSecondary,
-                        cursorColor = accent
+                        cursorColor = EmeraldAccent
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1151,7 +1161,7 @@ fun CreatePlaylistDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1170,10 +1180,10 @@ fun CreatePlaylistDialog(
                             }
                         },
                         enabled = name.trim().isNotEmpty(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = accent,
-                            contentColor = Color(0xFF04140A)
+                            containerColor = EmeraldAccent,
+                            contentColor = Color.Black
                         ),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1198,7 +1208,6 @@ fun AddToPlaylistSheet(
     onCreateNewClick: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val accent = LocalSonoraAccent.current
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1215,10 +1224,10 @@ fun AddToPlaylistSheet(
         ) {
             Text(
                 text = "Add to Playlist",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 color = TextPrimary
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "${track.title} • ${track.displayArtist}",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1230,51 +1239,43 @@ fun AddToPlaylistSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = accent.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, accent.copy(alpha = 0.48f)),
+                shape = RoundedCornerShape(8.dp),
+                color = ObsidianCard,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .sonoraPressable(shape = RoundedCornerShape(16.dp)) {
+                    .sonoraPressable(shape = RoundedCornerShape(8.dp)) {
                         onDismiss()
                         onCreateNewClick()
                     }
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         modifier = Modifier
                             .size(44.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(accent),
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(EmeraldAccent),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
                             contentDescription = "New Playlist",
-                            tint = Color(0xFF04140A),
-                            modifier = Modifier.size(24.dp)
+                            tint = Color.Black,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column {
-                        Text(
-                            text = "New Playlist",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Create a custom mix starting with this track",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "New Playlist",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (playlists.isEmpty()) {
                 Box(
@@ -1284,7 +1285,7 @@ fun AddToPlaylistSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No custom playlists yet — create one above!",
+                        text = "No playlists yet",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextMuted
                     )
@@ -1300,55 +1301,47 @@ fun AddToPlaylistSheet(
                         val containsTrack = playlist.trackIds.contains(track.id) ||
                             playlist.tracks.any { it.id == track.id }
                         val count = maxOf(playlist.tracks.size, playlist.trackIds.size)
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = ObsidianCard,
-                            border = BorderStroke(
-                                1.dp,
-                                if (containsTrack) accent.copy(alpha = 0.45f) else ObsidianStrokeSoft
-                            ),
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .sonoraPressable(shape = RoundedCornerShape(14.dp)) {
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
                                     onSelectPlaylist(playlist)
                                     onDismiss()
                                 }
+                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                SonoraArtwork(
-                                    artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
-                                    title = playlist.name,
-                                    cornerRadius = 10.dp,
-                                    colorStart = playlist.coverColorStart,
-                                    colorEnd = playlist.coverColorEnd,
-                                    modifier = Modifier.size(46.dp)
+                            SonoraArtwork(
+                                artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
+                                title = playlist.name,
+                                cornerRadius = 4.dp,
+                                colorStart = playlist.coverColorStart,
+                                colorEnd = playlist.coverColorEnd,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = playlist.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = playlist.name,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "$count tracks",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = TextSecondary
-                                    )
-                                }
-                                if (containsTrack) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Already added",
-                                        tint = accent,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                                Text(
+                                    text = "$count tracks",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                            }
+                            if (containsTrack) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "Added",
+                                    tint = EmeraldAccent,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
@@ -1367,7 +1360,6 @@ fun ImportExportPlaylistDialog(
     onImportCode: (String, Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    val accent = LocalSonoraAccent.current
     var importText by remember { mutableStateOf("") }
     var mergeIntoJamQueue by remember { mutableStateOf(false) }
     var copiedFeedback by remember { mutableStateOf(false) }
@@ -1384,7 +1376,7 @@ fun ImportExportPlaylistDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(16.dp),
             color = ObsidianSurface,
             border = BorderStroke(1.dp, ObsidianStroke),
             modifier = Modifier
@@ -1395,7 +1387,7 @@ fun ImportExportPlaylistDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(22.dp)
+                    .padding(20.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1410,8 +1402,8 @@ fun ImportExportPlaylistDialog(
                         Icon(
                             imageVector = Icons.Rounded.QrCode2,
                             contentDescription = null,
-                            tint = accent,
-                            modifier = Modifier.size(24.dp)
+                            tint = TextPrimary,
+                            modifier = Modifier.size(22.dp)
                         )
                         Text(
                             text = title,
@@ -1433,15 +1425,15 @@ fun ImportExportPlaylistDialog(
                 if (!exportCode.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Shareable Playlist / Jam Code",
+                        text = "Share Code",
                         style = MaterialTheme.typography.labelLarge,
                         color = TextSecondary
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color = ObsidianCard,
-                        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+                        border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -1468,28 +1460,28 @@ fun ImportExportPlaylistDialog(
                                 clipboard?.setPrimaryClip(ClipData.newPlainText("Sonora Code", exportCode))
                                 copiedFeedback = true
                             },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, ObsidianStroke),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
                                 imageVector = if (copiedFeedback) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                                 contentDescription = null,
-                                tint = accent,
+                                tint = TextPrimary,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (copiedFeedback) "Copied!" else "Copy Code",
+                                text = if (copiedFeedback) "Copied" else "Copy",
                                 color = TextPrimary
                             )
                         }
                         Button(
                             onClick = { onShareExport(exportCode) },
-                            shape = RoundedCornerShape(12.dp),
+                            shape = CircleShape,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = Color(0xFF04140A)
+                                containerColor = EmeraldAccent,
+                                contentColor = Color.Black
                             ),
                             modifier = Modifier.weight(1f)
                         ) {
@@ -1503,18 +1495,18 @@ fun ImportExportPlaylistDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(18.dp))
-                    HorizontalDivider(color = ObsidianStrokeSoft)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = ObsidianStroke)
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Import Playlist / Jam Code",
+                        text = "Import Code",
                         style = MaterialTheme.typography.titleMedium,
                         color = TextPrimary
                     )
@@ -1527,23 +1519,23 @@ fun ImportExportPlaylistDialog(
                             }
                         }
                     ) {
-                        Text("Paste", color = accent)
+                        Text("Paste", color = EmeraldAccent)
                     }
                 }
 
                 OutlinedTextField(
                     value = importText,
                     onValueChange = { importText = it },
-                    placeholder = { Text("Paste SONORA-PL-V1:... or sonora://playlist?code=...") },
+                    placeholder = { Text("Paste SONORA-PL-V1:... or link") },
                     minLines = 3,
                     maxLines = 5,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = accent,
+                        focusedBorderColor = TextPrimary,
                         unfocusedBorderColor = ObsidianStroke,
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
-                        cursorColor = accent
+                        cursorColor = EmeraldAccent
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1551,9 +1543,8 @@ fun ImportExportPlaylistDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(8.dp),
                     color = ObsidianCard,
-                    border = BorderStroke(1.dp, ObsidianStrokeSoft),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { mergeIntoJamQueue = !mergeIntoJamQueue }
@@ -1565,21 +1556,21 @@ fun ImportExportPlaylistDialog(
                         Icon(
                             imageVector = Icons.Rounded.Groups,
                             contentDescription = null,
-                            tint = if (mergeIntoJamQueue) VioletPulse else TextSecondary,
+                            tint = if (mergeIntoJamQueue) EmeraldAccent else TextSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (mergeIntoJamQueue) "Merge into Jam Queue" else "Import as Playlist",
+                                text = if (mergeIntoJamQueue) "Merge into Jam Queue" else "Save as Playlist",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = TextPrimary
                             )
                             Text(
                                 text = if (mergeIntoJamQueue) {
-                                    "Weaves imported tracks straight into active playback queue"
+                                    "Add tracks directly to active playback queue"
                                 } else {
-                                    "Saves as a new playlist in your library"
+                                    "Create a new playlist in Your Library"
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = TextSecondary
@@ -1589,8 +1580,8 @@ fun ImportExportPlaylistDialog(
                             checked = mergeIntoJamQueue,
                             onCheckedChange = { mergeIntoJamQueue = it },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = ObsidianBg,
-                                checkedTrackColor = VioletPulse
+                                checkedThumbColor = Color.Black,
+                                checkedTrackColor = EmeraldAccent
                             )
                         )
                     }
@@ -1604,7 +1595,7 @@ fun ImportExportPlaylistDialog(
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -1619,10 +1610,10 @@ fun ImportExportPlaylistDialog(
                             }
                         },
                         enabled = importText.trim().isNotEmpty(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (mergeIntoJamQueue) VioletPulse else accent,
-                            contentColor = ObsidianBg
+                            containerColor = EmeraldAccent,
+                            contentColor = Color.Black
                         ),
                         modifier = Modifier.weight(1f)
                     ) {

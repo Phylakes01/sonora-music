@@ -1,6 +1,6 @@
 package com.sonora.music.data.repository
 
-import com.sonora.music.data.network.AudiusApi
+import com.sonora.music.data.network.MusicCatalogApi
 import com.sonora.music.model.Artist
 import com.sonora.music.model.ListeningEvent
 import com.sonora.music.model.Playlist
@@ -13,7 +13,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.util.Locale
 
-class RecommendationEngine(private val audiusApi: AudiusApi) {
+class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
 
     suspend fun buildMadeForYou(
         history: List<ListeningEvent>,
@@ -52,33 +52,38 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
         val topArtist = rankedArtists.firstOrNull()
         val knownIds = history.mapTo(HashSet()) { it.trackId } + likedSongs.mapTo(HashSet()) { it.id }
 
-        val undergroundDeferred = async { audiusApi.getUndergroundTrending(20) }
-        val topGenreDeferred = async { audiusApi.getTrendingTracks(genre = topGenre, limit = 20) }
+        val phTopDeferred = async { catalogApi.getPhTopTracks(25) }
+        val opmDeferred = async { catalogApi.getOpmTrendingTracks(25) }
+        val globalDeferred = async { catalogApi.getGlobalTopTracks(25) }
+        val topGenreDeferred = async {
+            if (topGenre != null) catalogApi.getGenreTracks(topGenre, limit = 20) else emptyList()
+        }
         val secondGenreDeferred = async {
-            if (secondGenre != null) audiusApi.getTrendingTracks(genre = secondGenre, limit = 15)
-            else audiusApi.getTrendingTracks(limit = 15)
+            if (secondGenre != null) catalogApi.getGenreTracks(secondGenre, limit = 15) else emptyList()
         }
         val followedDeferred = followedArtistIds
             .filter { it.isNotBlank() }
             .take(3)
-            .map { artistId -> async { audiusApi.getArtistTracks(artistId, limit = 10) } }
+            .map { artistId -> async { catalogApi.getArtistTopTracks(artistId, limit = 10) } }
         val artistSearchDeferred = async {
-            if (topArtist != null) audiusApi.searchTracks(topArtist, limit = 12) else emptyList()
+            if (topArtist != null) catalogApi.searchTracks(topArtist, limit = 12) else emptyList()
         }
 
-        val underground = undergroundDeferred.await()
+        val phTop = phTopDeferred.await()
+        val opmTrending = opmDeferred.await()
+        val globalTop = globalDeferred.await()
         val topGenreTracks = topGenreDeferred.await()
         val secondGenreTracks = secondGenreDeferred.await()
         val followedTracks = followedDeferred.awaitAll().flatten()
         val artistTracks = artistSearchDeferred.await()
 
-        val discoverCandidates = (underground + topGenreTracks).distinctBy { it.id }
+        val discoverCandidates = (opmTrending + topGenreTracks + globalTop + phTop).distinctBy { it.id }
         val freshDiscover = discoverCandidates.filter { it.id !in knownIds }
         val discoverTracks = (freshDiscover + discoverCandidates)
             .distinctBy { it.id }
             .take(20)
 
-        val releaseTracks = (followedTracks + secondGenreTracks)
+        val releaseTracks = (followedTracks + phTop + secondGenreTracks + globalTop)
             .distinctBy { it.id }
             .sortedWith(
                 compareByDescending<Track> { it.releaseDate.isNotBlank() }
@@ -86,8 +91,10 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             )
             .take(20)
 
-        val likedAudio = likedSongs.filter { it.source == TrackSource.AUDIUS }.take(8)
-        val dailyTracks = (likedAudio + artistTracks + topGenreTracks + underground)
+        val likedMusic = likedSongs.filter {
+            it.source == TrackSource.DEEZER || it.source == TrackSource.ITUNES
+        }.take(8)
+        val dailyTracks = (likedMusic + artistTracks + topGenreTracks + opmTrending + phTop + globalTop)
             .distinctBy { it.id }
             .take(20)
 
@@ -96,12 +103,12 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
                 id = "mix_discover_weekly",
                 name = "Discover Weekly",
                 description = topGenre?.let {
-                    "Fresh underground & $it cuts curated for your rotation."
-                } ?: "Fresh underground discoveries tailored to your vibe.",
+                    "Fresh $it & trending PH and global cuts picked for you."
+                } ?: "Fresh OPM and global tracks picked for your rotation.",
                 trackIds = discoverTracks.map { it.id },
                 tracks = discoverTracks,
-                coverColorStart = 0xFF1ED760L,
-                coverColorEnd = 0xFF0B2F24L,
+                coverColorStart = 0xFF1DB954L,
+                coverColorEnd = 0xFF121212L,
                 artworkUrl = discoverTracks.firstOrNull()?.artworkUrl,
                 isUserCreated = false,
                 isSystemMix = true,
@@ -111,14 +118,14 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
                 id = "mix_release_radar",
                 name = "Release Radar",
                 description = if (followedArtistIds.isNotEmpty()) {
-                    "Latest drops from artists you follow and rising scenes."
+                    "New drops from artists you follow and PH charts."
                 } else {
-                    "New & trending releases across your favorite waves."
+                    "Latest PH and global releases across your rotation."
                 },
                 trackIds = releaseTracks.map { it.id },
                 tracks = releaseTracks,
-                coverColorStart = 0xFF00E5FFL,
-                coverColorEnd = 0xFF0F2744L,
+                coverColorStart = 0xFF2E4D45L,
+                coverColorEnd = 0xFF121212L,
                 artworkUrl = releaseTracks.firstOrNull()?.artworkUrl,
                 isUserCreated = false,
                 isSystemMix = true,
@@ -128,14 +135,14 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
                 id = "mix_daily_mix",
                 name = "Daily Mix",
                 description = if (rankedArtists.isNotEmpty()) {
-                    "Built around ${rankedArtists.take(2).joinToString(" & ")} and ${topGenre ?: "your favorites"}."
+                    "${rankedArtists.take(2).joinToString(", ")} and ${topGenre ?: "OPM & Global"} favorites."
                 } else {
-                    "Your everyday blend of high-rotation favorites."
+                    "Your daily blend of OPM hits and global chart favorites."
                 },
                 trackIds = dailyTracks.map { it.id },
                 tracks = dailyTracks,
-                coverColorStart = 0xFF8C6EFFL,
-                coverColorEnd = 0xFF1B1540L,
+                coverColorStart = 0xFF3E3A54L,
+                coverColorEnd = 0xFF121212L,
                 artworkUrl = dailyTracks.firstOrNull()?.artworkUrl,
                 isUserCreated = false,
                 isSystemMix = true,
@@ -159,18 +166,30 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             .eachCount()
             .maxByOrNull { it.value }
             ?.key
-        val dominantArtist = seedTracks
-            .map { it.artist.trim() }
-            .firstOrNull { it.isNotEmpty() }
+        val seedWithArtist = seedTracks.firstOrNull { it.artist.isNotBlank() }
 
-        val genreDeferred = async { audiusApi.getTrendingTracks(genre = dominantGenre, limit = 20) }
-        val artistDeferred = async {
-            if (dominantArtist != null) audiusApi.searchTracks(dominantArtist, limit = 12)
-            else emptyList()
+        val genreDeferred = async {
+            if (dominantGenre != null) catalogApi.getGenreTracks(dominantGenre, limit = 20)
+            else catalogApi.getPhTopTracks(20)
         }
-        val undergroundDeferred = async { audiusApi.getUndergroundTrending(15) }
+        val artistDeferred = async {
+            when {
+                seedWithArtist != null && seedWithArtist.artistId.isNotBlank() ->
+                    catalogApi.getArtistTopTracks(seedWithArtist.artistId, seedWithArtist.artist, limit = 12)
+                seedWithArtist != null ->
+                    catalogApi.searchTracks(seedWithArtist.artist, limit = 12)
+                else -> emptyList()
+            }
+        }
+        val opmDeferred = async { catalogApi.getOpmTrendingTracks(15) }
+        val globalDeferred = async { catalogApi.getGlobalTopTracks(15) }
 
-        val candidates = (artistDeferred.await() + genreDeferred.await() + undergroundDeferred.await())
+        val candidates = (
+            artistDeferred.await() +
+                genreDeferred.await() +
+                opmDeferred.await() +
+                globalDeferred.await()
+            )
             .distinctBy { it.id }
             .filter { it.id !in excluded && it.streamUrl.isNotBlank() }
 
@@ -183,17 +202,35 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
 
         val artistDeferred = async {
             when {
-                seedTrack.artistId.isNotBlank() -> audiusApi.getArtistTracks(seedTrack.artistId, limit = 12)
-                seedTrack.artist.isNotBlank() -> audiusApi.searchTracks(seedTrack.artist, limit = 12)
+                seedTrack.artistId.isNotBlank() || seedTrack.artist.isNotBlank() ->
+                    catalogApi.getArtistTopTracks(seedTrack.artistId, seedTrack.artist, limit = 12)
                 else -> emptyList()
             }
         }
-        val genreDeferred = async { audiusApi.getTrendingTracks(genre = genre, limit = 20) }
+        val relatedArtistsDeferred = async {
+            if (seedTrack.artistId.isNotBlank()) catalogApi.getRelatedArtists(seedTrack.artistId)
+            else emptyList()
+        }
+        val genreDeferred = async {
+            if (genre != null) catalogApi.getGenreTracks(genre, limit = 20)
+            else catalogApi.getPhTopTracks(20)
+        }
         val moodDeferred = async {
-            if (mood.isNotEmpty()) audiusApi.searchTracks(mood, limit = 12) else emptyList()
+            if (mood.isNotEmpty()) catalogApi.searchTracks(mood, limit = 12) else emptyList()
         }
 
-        val related = (moodDeferred.await() + artistDeferred.await() + genreDeferred.await())
+        val relatedArtistTracks = relatedArtistsDeferred.await()
+            .take(2)
+            .map { rel -> async { catalogApi.getArtistTopTracks(rel.id, rel.name, limit = 6) } }
+            .awaitAll()
+            .flatten()
+
+        val related = (
+            moodDeferred.await() +
+                artistDeferred.await() +
+                relatedArtistTracks +
+                genreDeferred.await()
+            )
             .filter { it.id != seedTrack.id }
             .distinctBy { it.id }
             .take(24)
@@ -202,18 +239,31 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
     }
 
     suspend fun buildArtistRadio(artist: Artist): List<Track> = coroutineScope {
-        val artistTracksDeferred = async { audiusApi.getArtistTracks(artist.id, limit = 20) }
-        val searchDeferred = async { audiusApi.searchTracks(artist.name, limit = 15) }
+        val artistTracksDeferred = async { catalogApi.getArtistTopTracks(artist.id, artist.name, limit = 15) }
+        val relatedArtistsDeferred = async { catalogApi.getRelatedArtists(artist.id) }
+        val searchDeferred = async {
+            if (artist.name.isNotBlank()) catalogApi.searchTracks(artist.name, limit = 12) else emptyList()
+        }
 
         val artistTracks = artistTracksDeferred.await()
+        val relatedTracks = relatedArtistsDeferred.await()
+            .take(3)
+            .map { rel -> async { catalogApi.getArtistTopTracks(rel.id, rel.name, limit = 6) } }
+            .awaitAll()
+            .flatten()
         val searchTracks = searchDeferred.await()
+
         val topGenre = (artistTracks + searchTracks)
             .map { it.genre.trim() }
             .firstOrNull { isMusicGenre(it) }
 
-        val genreTracks = audiusApi.getTrendingTracks(genre = topGenre, limit = 20)
+        val fallbackTracks = if (topGenre != null) {
+            catalogApi.getGenreTracks(topGenre, limit = 15)
+        } else {
+            catalogApi.getOpmTrendingTracks(15)
+        }
 
-        (artistTracks + searchTracks + genreTracks)
+        (artistTracks + relatedTracks + searchTracks + fallbackTracks)
             .distinctBy { it.id }
             .take(25)
     }
@@ -223,10 +273,10 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
         val (genres, searchTerms) = parsePromptKeywords(trimmedPrompt)
 
         val genreDeferreds = genres.take(2).map { genre ->
-            async { audiusApi.getTrendingTracks(genre = genre, limit = 15) }
+            async { catalogApi.getGenreTracks(genre, limit = 15) }
         }
         val searchDeferreds = searchTerms.take(2).map { term ->
-            async { audiusApi.searchTracks(term, limit = 15) }
+            async { catalogApi.searchTracks(term, limit = 15) }
         }
 
         val fetched = (genreDeferreds.awaitAll().flatten() + searchDeferreds.awaitAll().flatten())
@@ -234,8 +284,10 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             .toMutableList()
 
         if (fetched.size < 10) {
-            val fallback = audiusApi.getTrendingTracks(limit = 20)
-            fetched.addAll(fallback)
+            val phFallback = async { catalogApi.getPhTopTracks(20) }
+            val globalFallback = async { catalogApi.getGlobalTopTracks(15) }
+            fetched.addAll(phFallback.await())
+            fetched.addAll(globalFallback.await())
         }
 
         val tracks = fetched.distinctBy { it.id }.take(25)
@@ -246,9 +298,9 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             id = "ai_${System.currentTimeMillis()}",
             name = displayTitle,
             description = if (trimmedPrompt.isNotBlank()) {
-                "AI Mix generated for \"$trimmedPrompt\""
+                "Mix generated for \"$trimmedPrompt\""
             } else {
-                "AI Mix curated by Sonora"
+                "Custom Mood Mix"
             },
             trackIds = tracks.map { it.id },
             tracks = tracks,
@@ -257,14 +309,14 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             artworkUrl = tracks.firstOrNull()?.artworkUrl,
             isUserCreated = false,
             isSystemMix = true,
-            authorName = "Sonora AI"
+            authorName = "Sonora Mix"
         )
     }
 
     fun parsePromptKeywords(prompt: String): Pair<List<String>, List<String>> {
         val normalized = prompt.lowercase(Locale.ROOT).trim()
         if (normalized.isEmpty()) {
-            return listOf("Electronic", "Pop") to listOf("chill", "vibes")
+            return listOf("OPM", "Pop") to listOf("Cup of Joe", "BINI")
         }
 
         val genres = linkedSetOf<String>()
@@ -285,7 +337,7 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
         terms.addAll(tokens)
 
         if (genres.isEmpty()) {
-            genres.add("Electronic")
+            genres.add("OPM")
             genres.add("Pop")
         }
         if (terms.isEmpty()) {
@@ -325,7 +377,7 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
                     ?: likedArtByTrackId[sample.trackId]
                 WrappedTopItem(
                     name = sample.title.ifBlank { "Unknown Track" },
-                    subtitle = sample.artist.ifBlank { "Independent Artist" },
+                    subtitle = sample.artist.ifBlank { "Featured Artist" },
                     artworkUrl = art,
                     playCount = group.size,
                     totalMinutes = (group.sumOf { it.listenedMs.coerceAtLeast(0L) } / 60_000L).toInt()
@@ -404,45 +456,50 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
     ): Triple<String, String, List<Long>> {
         val g = topGenre.lowercase(Locale.ROOT)
         return when {
+            g.contains("opm") || g.contains("p-pop") || g.contains("pinoy") -> Triple(
+                "OPM Trailblazer",
+                "Keeping Pinoy charts, P-Pop hooks, and Manila soundscapes in heavy rotation.",
+                listOf(0xFF1DB954L, 0xFF2E4D45L, 0xFF181818L)
+            )
             g.contains("electronic") || g.contains("house") || g.contains("techno") || g.contains("synth") -> Triple(
                 "Neon Architect",
                 "Thriving on electric pulses, late-night synths, and high-voltage grooves.",
-                listOf(0xFF00E5FFL, 0xFF8C6EFFL, 0xFF1ED760L)
+                listOf(0xFF1DB954L, 0xFF2E3C48L, 0xFF181818L)
             )
             g.contains("hip-hop") || g.contains("hip hop") || g.contains("rap") || g.contains("trap") -> Triple(
                 "Rhythm Maverick",
                 "Locked into heavy 808s, crisp cadences, and forward-pushing beats.",
-                listOf(0xFFFF4D6DL, 0xFFFFB74DL, 0xFF8C6EFFL)
+                listOf(0xFF1DB954L, 0xFF42322AL, 0xFF181818L)
             )
             g.contains("lo-fi") || g.contains("lofi") || g.contains("ambient") || g.contains("chill") -> Triple(
                 "Midnight Voyager",
                 "Drifting through warm textures, tranquil loops, and late-night calm.",
-                listOf(0xFF38BDF8L, 0xFF8C6EFFL, 0xFF0F7A38L)
+                listOf(0xFF1DB954L, 0xFF283B48L, 0xFF181818L)
             )
             g.contains("rock") || g.contains("indie") || g.contains("alternative") -> Triple(
                 "Velvet Rebel",
                 "Chasing raw guitars, analog grit, and anthems that stay after midnight.",
-                listOf(0xFFFF4D6DL, 0xFF8C6EFFL, 0xFFFFB74DL)
+                listOf(0xFF1DB954L, 0xFF3E2D38L, 0xFF181818L)
             )
             g.contains("jazz") || g.contains("soul") || g.contains("r&b") || g.contains("acoustic") -> Triple(
                 "Soul Alchemist",
                 "Drawn to rich harmonies, warm grooves, and timeless vocal expression.",
-                listOf(0xFFFFB74DL, 0xFF1ED760L, 0xFF00E5FFL)
+                listOf(0xFF1DB954L, 0xFF3A3528L, 0xFF181818L)
             )
-            g.contains("pop") || g.contains("dance") -> Triple(
+            g.contains("pop") || g.contains("k-pop") || g.contains("dance") -> Triple(
                 "Prism Headliner",
                 "Living for radiant hooks, kinetic choruses, and nonstop momentum.",
-                listOf(0xFF1ED760L, 0xFFFF4D6DL, 0xFF00E5FFL)
+                listOf(0xFF1DB954L, 0xFF332D48L, 0xFF181818L)
             )
             uniqueArtists >= 10 && uniqueGenreCount >= 4 -> Triple(
                 "Genre Chameleon",
                 "Fearlessly crossing soundscapes with a taste for endless discovery.",
-                listOf(0xFF1ED760L, 0xFF00E5FFL, 0xFFFFB74DL)
+                listOf(0xFF1DB954L, 0xFF2B3E44L, 0xFF181818L)
             )
             else -> Triple(
                 "Sonic Explorer",
-                "Always chasing the next great wave across genres.",
-                listOf(0xFF1ED760L, 0xFF00E5FFL, 0xFF7B61FFL)
+                "Always chasing the next great track across OPM and global charts.",
+                listOf(0xFF1DB954L, 0xFF2E3C48L, 0xFF181818L)
             )
         }
     }
@@ -451,19 +508,19 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
         val text = (prompt + " " + genres.joinToString(" ")).lowercase(Locale.ROOT)
         return when {
             text.contains("workout") || text.contains("gym") || text.contains("rock") || text.contains("hip-hop") ->
-                0xFFFF4D6DL to 0xFF3E1025L
+                0xFF5A2E38L to 0xFF181818L
             text.contains("chill") || text.contains("night") || text.contains("ambient") || text.contains("sleep") ->
-                0xFF00E5FFL to 0xFF0F2744L
+                0xFF23394DL to 0xFF181818L
             text.contains("focus") || text.contains("study") || text.contains("lofi") || text.contains("lo-fi") ->
-                0xFF8C6EFFL to 0xFF1B1540L
-            text.contains("jazz") || text.contains("soul") || text.contains("summer") || text.contains("coffee") ->
-                0xFFFFB74DL to 0xFF3F230CL
-            else -> 0xFF1ED760L to 0xFF0B2F24L
+                0xFF3A3252L to 0xFF181818L
+            text.contains("opm") || text.contains("pinoy") || text.contains("hugot") || text.contains("p-pop") ->
+                0xFF1F4E37L to 0xFF181818L
+            else -> 0xFF1DB954L to 0xFF181818L
         }
     }
 
     private fun formatPromptTitle(prompt: String): String {
-        if (prompt.isBlank()) return "Sonora AI Mix"
+        if (prompt.isBlank()) return "Mood Mix"
         val words = prompt.split(Regex("\\s+")).filter { it.isNotBlank() }.take(5)
         val formatted = words.joinToString(" ") { word ->
             word.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
@@ -493,6 +550,21 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
 
         private val MOOD_RULES = listOf(
             MoodRule(
+                triggers = listOf("opm", "pinoy", "tagalog", "hugot", "manila", "kilig", "senti", "original pilipino"),
+                genres = listOf("OPM", "Chill"),
+                searchTerms = listOf("Cup of Joe", "Dionela", "Arthur Nery")
+            ),
+            MoodRule(
+                triggers = listOf("p-pop", "ppop", "bini", "sb19", "alamat"),
+                genres = listOf("P-Pop", "Pop"),
+                searchTerms = listOf("BINI", "SB19")
+            ),
+            MoodRule(
+                triggers = listOf("throwback", "2000s", "90s", "classic opm", "banda"),
+                genres = listOf("Throwback OPM", "Rock"),
+                searchTerms = listOf("Eraserheads", "Rivermaya")
+            ),
+            MoodRule(
                 triggers = listOf("gym", "workout", "run", "running", "cardio", "fitness", "pump", "hype", "energy", "energetic", "intense"),
                 genres = listOf("Electronic", "Hip-Hop/Rap", "House"),
                 searchTerms = listOf("workout", "energy", "bass", "hype")
@@ -514,33 +586,38 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             ),
             MoodRule(
                 triggers = listOf("sad", "heartbreak", "melancholy", "cry", "lonely", "blue", "emotional"),
-                genres = listOf("Indie", "R&B/Soul", "Alternative", "Acoustic"),
-                searchTerms = listOf("sad", "acoustic", "soul")
+                genres = listOf("OPM", "R&B", "Chill"),
+                searchTerms = listOf("Moira Dela Torre", "Arthur Nery", "acoustic")
             ),
             MoodRule(
                 triggers = listOf("happy", "sunny", "summer", "upbeat", "morning", "feel good", "joy", "bright"),
-                genres = listOf("Pop", "Electronic", "Dance", "R&B/Soul"),
-                searchTerms = listOf("summer", "sunshine", "groove")
+                genres = listOf("Pop", "P-Pop", "R&B"),
+                searchTerms = listOf("BINI", "Sabrina Carpenter", "Bruno Mars")
             ),
             MoodRule(
                 triggers = listOf("drive", "driving", "road trip", "highway", "cruising", "sunset", "neon", "synthwave", "cyberpunk"),
-                genres = listOf("Synthwave", "Electronic", "Rock", "Indie"),
-                searchTerms = listOf("synthwave", "drive", "night", "neon")
+                genres = listOf("Pop", "R&B", "Rock"),
+                searchTerms = listOf("The Weeknd", "Lola Amour", "Cup of Joe")
             ),
             MoodRule(
-                triggers = listOf("hip hop", "hip-hop", "rap", "trap", "bars", "808"),
-                genres = listOf("Hip-Hop/Rap", "Trap"),
-                searchTerms = listOf("hip hop", "rap", "trap")
+                triggers = listOf("hip hop", "hip-hop", "rap", "trap", "bars", "808", "pinoy rap"),
+                genres = listOf("Pinoy Hip-Hop", "Hip-Hop"),
+                searchTerms = listOf("Hev Abi", "Kendrick Lamar")
             ),
             MoodRule(
                 triggers = listOf("rock", "metal", "punk", "guitar", "indie", "alt"),
-                genres = listOf("Rock", "Alternative", "Indie"),
-                searchTerms = listOf("rock", "guitar", "indie")
+                genres = listOf("Rock", "Throwback OPM"),
+                searchTerms = listOf("IV Of Spades", "Eraserheads")
             ),
             MoodRule(
-                triggers = listOf("jazz", "soul", "funk", "groove", "coffee", "cafe"),
-                genres = listOf("Jazz", "R&B/Soul"),
-                searchTerms = listOf("jazz", "soul", "groove")
+                triggers = listOf("jazz", "soul", "funk", "groove", "coffee", "cafe", "r&b"),
+                genres = listOf("R&B", "Chill"),
+                searchTerms = listOf("Dionela", "Arthur Nery", "SZA")
+            ),
+            MoodRule(
+                triggers = listOf("k-pop", "kpop", "jennie", "blackpink", "bts"),
+                genres = listOf("K-Pop", "Pop"),
+                searchTerms = listOf("JENNIE", "BLACKPINK")
             ),
             MoodRule(
                 triggers = listOf("lofi", "lo-fi", "beats"),
@@ -554,8 +631,8 @@ class RecommendationEngine(private val audiusApi: AudiusApi) {
             ),
             MoodRule(
                 triggers = listOf("acoustic", "folk", "unplugged"),
-                genres = listOf("Acoustic", "Folk", "Indie"),
-                searchTerms = listOf("acoustic", "folk")
+                genres = listOf("Chill", "OPM"),
+                searchTerms = listOf("Ben&Ben", "TJ Monterde")
             )
         )
     }

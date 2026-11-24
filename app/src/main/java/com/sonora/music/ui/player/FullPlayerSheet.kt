@@ -6,14 +6,10 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,21 +30,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Share
@@ -56,47 +49,39 @@ import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SpeakerGroup
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sonora.music.model.Artist
@@ -110,40 +95,29 @@ import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
 import com.sonora.music.model.TrackSource
 import com.sonora.music.ui.components.SonoraArtwork
+import com.sonora.music.ui.components.SonoraSlimSlider
 import com.sonora.music.ui.theme.CoralHeart
-import com.sonora.music.ui.theme.CyanGlow
+import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianBg
 import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianCardElevated
 import com.sonora.music.ui.theme.ObsidianStroke
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
-import com.sonora.music.ui.theme.VioletPulse
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
-
-private enum class PlayerVisualMode(val label: String) {
-    COVER("Cover"),
-    VINYL("Vinyl"),
-    WAVE("Wave")
-}
 
 /**
- * Full-screen kinetic Obsidian player overlay with swipe-down dismiss, multi-stop animated
- * aurora backdrop, 3D tilt Cover / rotating Vinyl / live Soundwave modes, heart burst
- * animation, glowing seek scrubber, 3-state Smart Shuffle, and quick utility dock.
+ * Calm, matte full-screen player sheet with darkened artwork wash fading into #121212,
+ * large square artwork, slim seek scrubber, solid white Play/Pause button, and unboxed utilities.
  */
 @Composable
 fun FullPlayerSheet(
     state: SonoraUiState,
     actions: SonoraActions,
     onTrackOverflow: (Track) -> Unit,
-    onAddToPlaylist: (Track) -> Unit,
+    @Suppress("UNUSED_PARAMETER") onAddToPlaylist: (Track) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val track = state.playback.currentTrack ?: return
@@ -157,13 +131,13 @@ fun FullPlayerSheet(
 
     val accentColor by animateColorAsState(
         targetValue = state.dominantAccent,
-        animationSpec = tween(durationMillis = 650),
+        animationSpec = tween(durationMillis = 550),
         label = "full_player_accent"
     )
+    val topWashColor = lerp(ObsidianBg, accentColor.copy(alpha = 1f), 0.34f)
+    val midWashColor = lerp(ObsidianBg, accentColor.copy(alpha = 1f), 0.12f)
 
-    var visualMode by remember { mutableStateOf(PlayerVisualMode.COVER) }
-
-    // Swipe-down-to-dismiss gesture state (works smoothly with NestedScrollConnection)
+    // Swipe-down-to-dismiss gesture state
     val scrollState = rememberScrollState()
     val dismissOffsetY = remember { Animatable(0f) }
     val dismissThresholdPx = with(density) { 140.dp.toPx() }
@@ -211,51 +185,59 @@ fun FullPlayerSheet(
         }
     }
 
-    // Heart burst animation state
-    val heartBurstRing = remember { Animatable(0f) }
-    var previousLiked by remember(track.id) { mutableStateOf(isLiked) }
-    LaunchedEffect(isLiked) {
-        if (isLiked && !previousLiked) {
-            heartBurstRing.snapTo(0f)
-            heartBurstRing.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 520)
-            )
-        }
-        previousLiked = isLiked
-    }
     val heartScale by animateFloatAsState(
-        targetValue = if (isLiked) 1.22f else 1f,
+        targetValue = if (isLiked) 1.18f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
-        label = "heart_scale"
+        label = "full_heart_scale"
     )
 
-    // Interactive seek tracking to avoid jumping while dragging
-    var isDraggingSlider by remember { mutableStateOf(false) }
-    var sliderDragMs by remember { mutableFloatStateOf(0f) }
-    val durationMs = playback.durationMs.coerceAtLeast(track.durationSec * 1000L).coerceAtLeast(0L)
-    val displayPositionMs = if (isDraggingSlider) {
-        sliderDragMs.toLong()
-    } else {
-        playback.positionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+    // Smooth debounced seek handling for SonoraSlimSlider
+    var pendingSeekMs by remember(track.id) { mutableStateOf<Float?>(null) }
+    LaunchedEffect(pendingSeekMs) {
+        val target = pendingSeekMs ?: return@LaunchedEffect
+        delay(90L)
+        actions.seekTo(target.toLong())
+        pendingSeekMs = null
     }
 
-    val qualityBadge = when {
-        downloadState?.status == DownloadStatus.DOWNLOADED -> "OFFLINE MP3"
-        track.isLive || track.source == TrackSource.RADIO -> "LIVE RADIO"
-        track.source == TrackSource.LOCAL -> "LOCAL"
-        else -> "STREAMING"
+    val durationMs = playback.durationMs.coerceAtLeast(track.durationSec * 1000L).coerceAtLeast(0L)
+    val displayPositionMs = pendingSeekMs?.toLong()
+        ?: playback.positionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
+
+    val contextSubtitle = remember(track, downloadState?.status) {
+        when {
+            downloadState?.status == DownloadStatus.DOWNLOADED -> "Offline Downloads"
+            track.isLive || track.source == TrackSource.RADIO -> "Live Radio"
+            track.source == TrackSource.PODCAST -> "Podcast"
+            track.source == TrackSource.AUDIOBOOK -> "Audiobook"
+            track.source == TrackSource.LOCAL -> "Local Files"
+            track.album.isNotBlank() -> track.album
+            track.genre.isNotBlank() -> track.genre
+            else -> "Sonora"
+        }
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .offset { IntOffset(0, dismissOffsetY.value.roundToInt()) }
-            .clip(RoundedCornerShape(topStart = if (dismissOffsetY.value > 4f) 28.dp else 0.dp, topEnd = if (dismissOffsetY.value > 4f) 28.dp else 0.dp))
-            .background(ObsidianBg)
+            .clip(
+                RoundedCornerShape(
+                    topStart = if (dismissOffsetY.value > 4f) 24.dp else 0.dp,
+                    topEnd = if (dismissOffsetY.value > 4f) 24.dp else 0.dp
+                )
+            )
+            .background(
+                Brush.verticalGradient(
+                    0.0f to topWashColor,
+                    0.42f to midWashColor,
+                    0.72f to ObsidianBg,
+                    1.0f to ObsidianBg
+                )
+            )
             .nestedScroll(nestedDismissConnection)
             .pointerInput(track.id) {
                 detectVerticalDragGestures(
@@ -287,34 +269,16 @@ fun FullPlayerSheet(
                 )
             }
     ) {
-        // Multi-stop animated ambient aurora backdrop
-        AmbientAuroraBackdrop(
-            accentColor = accentColor,
-            isPlaying = playback.isPlaying,
-            modifier = Modifier.fillMaxSize()
-        )
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .verticalScroll(scrollState)
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .padding(horizontal = 24.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Subtle drag pill
-            Box(
-                modifier = Modifier
-                    .width(40.dp)
-                    .height(4.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.24f))
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Top bar: dismiss, source/quality badge, output device pill, overflow
+            // Minimal top bar
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -330,57 +294,32 @@ fun FullPlayerSheet(
                 }
 
                 Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(accentColor.copy(alpha = 0.16f))
-                                .border(1.dp, accentColor.copy(alpha = 0.42f), RoundedCornerShape(50))
-                                .padding(horizontal = 10.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = qualityBadge,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.8.sp
-                                ),
-                                color = accentColor
-                            )
-                        }
-
-                        // Output device pill
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(ObsidianCard.copy(alpha = 0.72f))
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(50))
-                                .clickable { actions.openOutputPicker() }
-                                .padding(horizontal = 10.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.SpeakerGroup,
-                                contentDescription = "Audio output",
-                                tint = CyanGlow,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = activeDevice?.name ?: "Phone Speaker",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.width(86.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = "NOW PLAYING",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            letterSpacing = 1.2.sp
+                        ),
+                        color = TextSecondary,
+                        maxLines = 1
+                    )
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(
+                        text = contextSubtitle,
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 IconButton(onClick = { onTrackOverflow(track) }) {
@@ -392,73 +331,32 @@ fun FullPlayerSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Visual Mode Switcher: Cover | Vinyl | Wave
-            VisualModeSwitcher(
-                selectedMode = visualMode,
-                accentColor = accentColor,
-                onSelect = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    visualMode = it
-                }
-            )
-
-            Spacer(modifier = Modifier.height(18.dp))
-
-            // Dynamic Center Artwork / Vinyl / Wave Stage
+            // Clean large square rounded-10.dp artwork with subtle shadow
             BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
-                val stageSize = minOf(maxWidth * 0.82f, 316.dp)
-                when (visualMode) {
-                    PlayerVisualMode.COVER -> {
-                        InteractiveTiltCoverCard(
-                            track = track,
-                            accentColor = accentColor,
-                            isPlaying = playback.isPlaying,
-                            modifier = Modifier.size(stageSize)
+                val artSize = minOf(maxWidth, 344.dp)
+                SonoraArtwork(
+                    artworkUrl = track.artworkUrl,
+                    title = track.title,
+                    cornerRadius = 10.dp,
+                    modifier = Modifier
+                        .size(artSize)
+                        .shadow(
+                            elevation = 20.dp,
+                            shape = RoundedCornerShape(10.dp),
+                            ambientColor = Color.Black,
+                            spotColor = Color.Black
                         )
-                    }
-
-                    PlayerVisualMode.VINYL -> {
-                        RotatingVinylTurntable(
-                            track = track,
-                            isPlaying = playback.isPlaying,
-                            accentColor = accentColor,
-                            modifier = Modifier.size(stageSize)
-                        )
-                    }
-
-                    PlayerVisualMode.WAVE -> {
-                        Box(
-                            modifier = Modifier.size(stageSize),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            SoundwaveCanvas(
-                                isPlaying = playback.isPlaying,
-                                accentColor = accentColor,
-                                innerRadiusFraction = 0.25f,
-                                barCount = 68,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            SonoraArtwork(
-                                artworkUrl = track.artworkUrl,
-                                title = track.title,
-                                modifier = Modifier
-                                    .size(stageSize * 0.46f)
-                                    .border(2.dp, accentColor.copy(alpha = 0.65f), CircleShape),
-                                isCircle = true
-                            )
-                        }
-                    }
-                }
+                )
             }
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // Track Info + Heart Burst + Download + Share
+            // Track title + tappable artist on left, Heart + Download on right
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -466,17 +364,19 @@ fun FullPlayerSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = track.title,
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
                         color = TextPrimary,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = track.displayArtist,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (track.artistId.isNotBlank()) accentColor else TextSecondary,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+                        color = TextSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable(enabled = track.artistId.isNotBlank()) {
@@ -495,54 +395,23 @@ fun FullPlayerSheet(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Heart Burst Button
-                Box(
-                    modifier = Modifier.size(44.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (heartBurstRing.value > 0f && heartBurstRing.value < 1f) {
-                        val p = heartBurstRing.value
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawCircle(
-                                color = CoralHeart.copy(alpha = (1f - p) * 0.85f),
-                                radius = size.minDimension * (0.35f + p * 0.55f),
-                                style = Stroke(width = 3.dp.toPx() * (1f - p * 0.7f))
-                            )
-                            for (i in 0 until 6) {
-                                val a = (i / 6f) * (2f * PI).toFloat()
-                                val dist = size.minDimension * (0.32f + p * 0.45f)
-                                drawCircle(
-                                    color = CoralHeart.copy(alpha = 1f - p),
-                                    radius = 2.5.dp.toPx() * (1f - p * 0.5f),
-                                    center = Offset(
-                                        x = center.x + dist * cos(a),
-                                        y = center.y + dist * sin(a)
-                                    )
-                                )
-                            }
-                        }
-                    }
-
-                    IconButton(onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        actions.toggleLike(track)
-                    }) {
-                        Icon(
-                            imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (isLiked) "Unlike track" else "Like track",
-                            tint = if (isLiked) CoralHeart else TextSecondary,
-                            modifier = Modifier
-                                .size(26.dp)
-                                .scale(heartScale)
-                        )
-                    }
+                IconButton(onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    actions.toggleLike(track)
+                }) {
+                    Icon(
+                        imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (isLiked) "Unlike track" else "Like track",
+                        tint = if (isLiked) CoralHeart else TextSecondary,
+                        modifier = Modifier
+                            .size(26.dp)
+                            .scale(heartScale)
+                    )
                 }
 
-                // Download button with progress
                 if (!track.isLive && track.source != TrackSource.LOCAL) {
                     PlayerDownloadButton(
                         downloadState = downloadState,
-                        accentColor = accentColor,
                         onClick = {
                             if (downloadState?.status == DownloadStatus.DOWNLOADED) {
                                 actions.deleteDownload(track.id)
@@ -552,73 +421,90 @@ fun FullPlayerSheet(
                         }
                     )
                 }
+            }
 
-                IconButton(onClick = { actions.shareTrack(track) }) {
-                    Icon(
-                        imageVector = Icons.Rounded.Share,
-                        contentDescription = "Share track",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(22.dp)
-                    )
+            if (track.isPreviewOnly) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(ObsidianCard)
+                            .border(1.dp, ObsidianStroke, RoundedCornerShape(50))
+                            .clickable { actions.openFullTrackExternal(track) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "30s Preview · Open Full Song",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = TextPrimary
+                        )
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = "Open full song",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            // Seek slider or Live Radio pulse pill
+            // Seek scrubber or Live radio indicator
             if (track.isLive) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(42.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(CoralHeart.copy(alpha = 0.14f))
-                        .border(1.dp, CoralHeart.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-                    contentAlignment = Alignment.Center
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(CoralHeart)
-                        )
-                        Text(
-                            text = "LIVE GLOBAL STREAM",
-                            style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.sp),
-                            color = CoralHeart
-                        )
-                    }
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(CoralHeart)
+                    )
+                    Text(
+                        text = "LIVE",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Live radio broadcast",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
                 }
             } else {
                 val safeMax = durationMs.coerceAtLeast(1L).toFloat()
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Slider(
+                    SonoraSlimSlider(
                         value = displayPositionMs.toFloat().coerceIn(0f, safeMax),
-                        onValueChange = { value ->
-                            isDraggingSlider = true
-                            sliderDragMs = value
-                        },
-                        onValueChangeFinished = {
-                            actions.seekTo(sliderDragMs.toLong())
-                            isDraggingSlider = false
-                        },
+                        onValueChange = { value -> pendingSeekMs = value },
                         valueRange = 0f..safeMax,
-                        colors = SliderDefaults.colors(
-                            thumbColor = TextPrimary,
-                            activeTrackColor = accentColor,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.16f)
-                        ),
+                        activeColor = Color.White,
+                        inactiveColor = Color(0xFF4D4D4D),
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Spacer(modifier = Modifier.height(4.dp))
+
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
@@ -636,18 +522,17 @@ fun FullPlayerSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Main Transport Controls
+            // Transport bar: Shuffle, Prev, Solid White 64.dp Play/Pause, Next, Repeat
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 3-state Shuffle (OFF, SHUFFLE, SMART_SHUFFLE glowing ✦)
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -659,27 +544,27 @@ fun FullPlayerSheet(
                     Icon(
                         imageVector = Icons.Rounded.Shuffle,
                         contentDescription = "Shuffle mode",
-                        tint = if (shuffleActive) accentColor else TextSecondary,
+                        tint = if (shuffleActive) EmeraldAccent else TextSecondary,
                         modifier = Modifier.size(24.dp)
                     )
                     if (playback.shuffleMode == ShuffleMode.SMART_SHUFFLE) {
                         Icon(
                             imageVector = Icons.Rounded.AutoAwesome,
                             contentDescription = "Smart Shuffle",
-                            tint = CyanGlow,
+                            tint = EmeraldAccent,
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(6.dp)
-                                .size(13.dp)
+                                .padding(5.dp)
+                                .size(12.dp)
                         )
                     } else if (playback.shuffleMode == ShuffleMode.SHUFFLE) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 6.dp)
+                                .padding(bottom = 5.dp)
                                 .size(4.dp)
                                 .clip(CircleShape)
-                                .background(accentColor)
+                                .background(EmeraldAccent)
                         )
                     }
                 }
@@ -689,37 +574,21 @@ fun FullPlayerSheet(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         actions.skipPrev()
                     },
-                    modifier = Modifier.size(54.dp)
+                    modifier = Modifier.size(52.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipPrevious,
                         contentDescription = "Previous track",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(38.dp)
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp)
                     )
                 }
 
-                // Glowing Play / Pause button with buffering ring
                 Box(
                     modifier = Modifier
-                        .size(76.dp)
-                        .drawBehind {
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        accentColor.copy(alpha = 0.48f),
-                                        Color.Transparent
-                                    )
-                                ),
-                                radius = size.minDimension * 0.68f
-                            )
-                        }
+                        .size(64.dp)
                         .clip(CircleShape)
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(accentColor, CyanGlow)
-                            )
-                        )
+                        .background(Color.White)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             actions.togglePlayPause()
@@ -728,16 +597,16 @@ fun FullPlayerSheet(
                 ) {
                     if (playback.isBuffering) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(66.dp),
-                            color = ObsidianBg.copy(alpha = 0.75f),
-                            strokeWidth = 3.dp
+                            modifier = Modifier.size(54.dp),
+                            color = Color.Black.copy(alpha = 0.65f),
+                            strokeWidth = 2.5.dp
                         )
                     }
                     Icon(
                         imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (playback.isPlaying) "Pause" else "Play",
-                        tint = ObsidianBg,
-                        modifier = Modifier.size(38.dp)
+                        tint = Color.Black,
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
@@ -746,20 +615,19 @@ fun FullPlayerSheet(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         actions.skipNext()
                     },
-                    modifier = Modifier.size(54.dp)
+                    modifier = Modifier.size(52.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
                         contentDescription = "Next track",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(38.dp)
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp)
                     )
                 }
 
-                // 3-state Repeat
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -775,380 +643,98 @@ fun FullPlayerSheet(
                             Icons.Rounded.Repeat
                         },
                         contentDescription = "Repeat mode",
-                        tint = if (repeatActive) accentColor else TextSecondary,
+                        tint = if (repeatActive) EmeraldAccent else TextSecondary,
                         modifier = Modifier.size(24.dp)
                     )
                     if (playback.repeatMode == RepeatMode.ALL) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 6.dp)
+                                .padding(bottom = 5.dp)
                                 .size(4.dp)
                                 .clip(CircleShape)
-                                .background(accentColor)
+                                .background(EmeraldAccent)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Bottom quick action dock: Lyrics, Queue/Jam, Audio Studio, Track Radio, Add to Playlist
+            // Clean unboxed bottom utility row: Output Device (left), Lyrics, Queue, EQ (Tune), Share (right)
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(ObsidianCard.copy(alpha = 0.65f))
-                    .border(1.dp, ObsidianStroke, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                PlayerToolAction(
-                    icon = Icons.Rounded.Lyrics,
-                    label = "Lyrics",
-                    tint = if (state.currentLyrics?.syncedLines?.isNotEmpty() == true) accentColor else TextSecondary,
-                    onClick = { actions.openLyrics() }
-                )
-                PlayerToolAction(
-                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                    label = "Queue",
-                    tint = TextSecondary,
-                    onClick = { actions.openQueue() }
-                )
-                PlayerToolAction(
-                    icon = Icons.Rounded.Equalizer,
-                    label = "Studio",
-                    tint = if (state.audioSettings.eqEnabled) accentColor else TextSecondary,
-                    onClick = { actions.openAudioStudio() }
-                )
-                PlayerToolAction(
-                    icon = Icons.Rounded.Radio,
-                    label = "Radio",
-                    tint = TextSecondary,
-                    onClick = { actions.startRadio(track) }
-                )
-                PlayerToolAction(
-                    icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                    label = "Playlist",
-                    tint = TextSecondary,
-                    onClick = { onAddToPlaylist(track) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-        }
-    }
-}
-
-@Composable
-private fun AmbientAuroraBackdrop(
-    accentColor: Color,
-    isPlaying: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val drift by animateFloatAsState(
-        targetValue = if (isPlaying) 1f else 0.45f,
-        animationSpec = tween(durationMillis = 800),
-        label = "aurora_drift"
-    )
-    Canvas(modifier = modifier) {
-        drawRect(color = ObsidianBg)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    accentColor.copy(alpha = 0.36f * drift + 0.10f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.25f, size.height * 0.22f),
-                radius = size.width * 0.85f
-            ),
-            radius = size.width * 0.85f,
-            center = Offset(size.width * 0.25f, size.height * 0.22f)
-        )
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    CyanGlow.copy(alpha = 0.16f * drift + 0.04f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.82f, size.height * 0.34f),
-                radius = size.width * 0.68f
-            ),
-            radius = size.width * 0.68f,
-            center = Offset(size.width * 0.82f, size.height * 0.34f)
-        )
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    VioletPulse.copy(alpha = 0.18f * drift + 0.04f),
-                    Color.Transparent
-                ),
-                center = Offset(size.width * 0.5f, size.height * 0.78f),
-                radius = size.width * 0.78f
-            ),
-            radius = size.width * 0.78f,
-            center = Offset(size.width * 0.5f, size.height * 0.78f)
-        )
-    }
-}
-
-@Composable
-private fun VisualModeSwitcher(
-    selectedMode: PlayerVisualMode,
-    accentColor: Color,
-    onSelect: (PlayerVisualMode) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(ObsidianCard.copy(alpha = 0.72f))
-            .border(1.dp, ObsidianStroke, RoundedCornerShape(50))
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        PlayerVisualMode.entries.forEach { mode ->
-            val selected = mode == selectedMode
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(if (selected) accentColor else Color.Transparent)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onSelect(mode) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                if (mode == PlayerVisualMode.WAVE) {
+                IconButton(
+                    onClick = { actions.openOutputPicker() },
+                    modifier = Modifier.size(40.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Rounded.GraphicEq,
-                        contentDescription = null,
-                        tint = if (selected) ObsidianBg else TextSecondary,
-                        modifier = Modifier.size(14.dp)
+                        imageVector = Icons.Rounded.SpeakerGroup,
+                        contentDescription = activeDevice?.name ?: "Output device",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(21.dp)
                     )
                 }
-                Text(
-                    text = mode.label,
-                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
-                    color = if (selected) ObsidianBg else TextSecondary
-                )
-            }
-        }
-    }
-}
 
-@Composable
-private fun InteractiveTiltCoverCard(
-    track: Track,
-    accentColor: Color,
-    isPlaying: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val scope = rememberCoroutineScope()
-    val tiltX = remember { Animatable(0f) }
-    val tiltY = remember { Animatable(0f) }
-    val density = LocalDensity.current.density
-    val scale by animateFloatAsState(
-        targetValue = if (isPlaying) 1f else 0.94f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
-        label = "cover_play_scale"
-    )
+                Spacer(modifier = Modifier.weight(1f))
 
-    Box(
-        modifier = modifier
-            .scale(scale)
-            .drawBehind {
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            accentColor.copy(alpha = 0.40f),
-                            CyanGlow.copy(alpha = 0.14f),
-                            Color.Transparent
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { actions.openLyrics() },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Lyrics,
+                            contentDescription = "Lyrics",
+                            tint = if (state.currentLyrics?.syncedLines?.isNotEmpty() == true) EmeraldAccent else TextSecondary,
+                            modifier = Modifier.size(21.dp)
                         )
-                    ),
-                    radius = size.minDimension * 0.62f
-                )
-            }
-            .graphicsLayer {
-                rotationX = tiltX.value
-                rotationY = tiltY.value
-                cameraDistance = 12f * density
-            }
-            .pointerInput(track.id) {
-                detectDragGestures(
-                    onDragEnd = {
-                        scope.launch {
-                            launch { tiltX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
-                            launch { tiltY.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy)) }
-                        }
-                    },
-                    onDragCancel = {
-                        scope.launch {
-                            launch { tiltX.animateTo(0f) }
-                            launch { tiltY.animateTo(0f) }
-                        }
-                    },
-                    onDrag = { _, dragAmount ->
-                        scope.launch {
-                            val nextY = (tiltY.value + dragAmount.x * 0.18f).coerceIn(-18f, 18f)
-                            val nextX = (tiltX.value - dragAmount.y * 0.18f).coerceIn(-18f, 18f)
-                            tiltY.snapTo(nextY)
-                            tiltX.snapTo(nextX)
-                        }
                     }
-                )
-            }
-            .shadow(elevation = 24.dp, shape = RoundedCornerShape(28.dp), ambientColor = accentColor)
-            .clip(RoundedCornerShape(28.dp))
-            .border(1.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(28.dp)),
-        contentAlignment = Alignment.Center
-    ) {
-        SonoraArtwork(
-            artworkUrl = track.artworkUrl,
-            title = track.title,
-            modifier = Modifier.fillMaxSize(),
-            cornerRadius = 28.dp
-        )
-    }
-}
 
-@Composable
-private fun RotatingVinylTurntable(
-    track: Track,
-    isPlaying: Boolean,
-    accentColor: Color,
-    modifier: Modifier = Modifier
-) {
-    var rotationAngle by remember(track.id) { mutableFloatStateOf(0f) }
-    LaunchedEffect(isPlaying, track.id) {
-        if (!isPlaying) return@LaunchedEffect
-        var lastNanos = withFrameNanos { it }
-        while (isActive) {
-            val now = withFrameNanos { it }
-            val dt = ((now - lastNanos).coerceAtLeast(0L)) / 1_000_000_000f
-            lastNanos = now
-            rotationAngle = (rotationAngle + dt * 42f) % 360f
-        }
-    }
-
-    val tonearmAngle by animateFloatAsState(
-        targetValue = if (isPlaying) 14f else -18f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
-        label = "tonearm_angle"
-    )
-
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        // Spinning vinyl record
-        Box(
-            modifier = Modifier
-                .fillMaxSize(0.88f)
-                .graphicsLayer { rotationZ = rotationAngle },
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val radius = size.minDimension / 2f
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFF1A1E28),
-                            Color(0xFF0A0C10),
-                            Color(0xFF141822)
+                    IconButton(
+                        onClick = { actions.openQueue() },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                            contentDescription = "Queue",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(22.dp)
                         )
-                    ),
-                    radius = radius
-                )
-                // Grooves
-                for (i in 1..11) {
-                    val r = radius * (0.48f + i * 0.044f)
-                    drawCircle(
-                        color = Color.White.copy(alpha = if (i % 3 == 0) 0.12f else 0.05f),
-                        radius = r,
-                        style = Stroke(width = 1.dp.toPx())
-                    )
+                    }
+
+                    IconButton(
+                        onClick = { actions.openAudioStudio() },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = "Audio Equalizer",
+                            tint = if (state.audioSettings.eqEnabled) EmeraldAccent else TextSecondary,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { actions.shareTrack(track) },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = "Share track",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(21.dp)
+                        )
+                    }
                 }
-                // Metallic sheen
-                drawArc(
-                    brush = Brush.sweepGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            accentColor.copy(alpha = 0.22f),
-                            Color.Transparent,
-                            Color.White.copy(alpha = 0.10f),
-                            Color.Transparent
-                        )
-                    ),
-                    startAngle = 0f,
-                    sweepAngle = 360f,
-                    useCenter = true
-                )
-                drawCircle(
-                    color = accentColor.copy(alpha = 0.45f),
-                    radius = radius,
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
             }
 
-            SonoraArtwork(
-                artworkUrl = track.artworkUrl,
-                title = track.title,
-                modifier = Modifier
-                    .fillMaxSize(0.45f)
-                    .border(2.dp, accentColor.copy(alpha = 0.55f), CircleShape),
-                isCircle = true,
-                showVinylHole = true
-            )
-        }
-
-        // Animated Tonearm overlay pivoted from top-right
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0.88f, 0.12f)
-                    rotationZ = tonearmAngle
-                }
-        ) {
-            val pivot = Offset(size.width * 0.88f, size.height * 0.12f)
-            val elbow = Offset(size.width * 0.78f, size.height * 0.42f)
-            val needle = Offset(size.width * 0.68f, size.height * 0.53f)
-
-            drawCircle(
-                color = ObsidianCardElevated,
-                radius = 12.dp.toPx(),
-                center = pivot
-            )
-            drawCircle(
-                color = accentColor,
-                radius = 5.dp.toPx(),
-                center = pivot
-            )
-            drawLine(
-                color = Color(0xFFD1D7E3),
-                start = pivot,
-                end = elbow,
-                strokeWidth = 4.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = Color(0xFFD1D7E3),
-                start = elbow,
-                end = needle,
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawCircle(
-                color = accentColor,
-                radius = 4.dp.toPx(),
-                center = needle
-            )
+            Spacer(modifier = Modifier.height(12.dp))
         }
     }
 }
@@ -1156,7 +742,6 @@ private fun RotatingVinylTurntable(
 @Composable
 private fun PlayerDownloadButton(
     downloadState: DownloadState?,
-    accentColor: Color,
     onClick: () -> Unit
 ) {
     val status = downloadState?.status ?: DownloadStatus.NONE
@@ -1166,7 +751,7 @@ private fun PlayerDownloadButton(
                 CircularProgressIndicator(
                     progress = { (downloadState?.progress ?: 0f).coerceIn(0.05f, 1f) },
                     modifier = Modifier.size(22.dp),
-                    color = accentColor,
+                    color = EmeraldAccent,
                     strokeWidth = 2.5.dp
                 )
             }
@@ -1175,7 +760,7 @@ private fun PlayerDownloadButton(
                 Icon(
                     imageVector = Icons.Rounded.CheckCircle,
                     contentDescription = "Downloaded offline",
-                    tint = accentColor,
+                    tint = EmeraldAccent,
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -1189,35 +774,6 @@ private fun PlayerDownloadButton(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun PlayerToolAction(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    onClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier.size(20.dp)
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-            color = tint
-        )
     }
 }
 

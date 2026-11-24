@@ -35,19 +35,26 @@ internal suspend fun OkHttpClient.getText(
     url: String,
     acceptHeader: String? = null
 ): String? = withContext(Dispatchers.IO) {
+    val (code, body) = getResponse(url, acceptHeader)
+    if (code in 200..299) body else null
+}
+
+internal suspend fun OkHttpClient.getResponse(
+    url: String,
+    acceptHeader: String? = null
+): Pair<Int, String?> = withContext(Dispatchers.IO) {
     try {
         val requestBuilder = Request.Builder().url(url).get()
         if (!acceptHeader.isNullOrBlank()) {
             requestBuilder.header("Accept", acceptHeader)
         }
         newCall(requestBuilder.build()).execute().use { response ->
-            if (!response.isSuccessful) return@withContext null
-            response.body?.string()
+            response.code to response.body?.string()
         }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Throwable) {
-        null
+        -1 to null
     }
 }
 

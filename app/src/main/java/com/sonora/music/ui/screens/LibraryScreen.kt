@@ -1,12 +1,8 @@
 package com.sonora.music.ui.screens
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,22 +22,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -67,28 +61,21 @@ import com.sonora.music.model.Playlist
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
-import com.sonora.music.ui.components.SonoraAmbientBackdrop
 import com.sonora.music.ui.components.SonoraArtwork
-import com.sonora.music.ui.components.SonoraBadge
 import com.sonora.music.ui.components.SonoraPillChip
 import com.sonora.music.ui.components.SonoraSectionHeader
 import com.sonora.music.ui.components.TrackRow
 import com.sonora.music.ui.components.formatBytesMb
 import com.sonora.music.ui.components.sonoraPressable
-import com.sonora.music.ui.theme.AmberGold
-import com.sonora.music.ui.theme.CoralHeart
-import com.sonora.music.ui.theme.CyanGlow
 import com.sonora.music.ui.theme.EmeraldAccent
-import com.sonora.music.ui.theme.LocalSonoraAccent
+import com.sonora.music.ui.theme.EmeraldDeep
 import com.sonora.music.ui.theme.ObsidianBg
 import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianCardElevated
 import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.ObsidianStrokeSoft
+import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
-import com.sonora.music.ui.theme.VioletPulse
 
 private enum class LibraryFilter(val label: String) {
     ALL("All"),
@@ -109,7 +96,6 @@ fun LibraryScreen(
     modifier: Modifier = Modifier
 ) {
     val library = state.library
-    val accent = LocalSonoraAccent.current
     var selectedFilter by rememberSaveable { mutableStateOf(LibraryFilter.ALL) }
 
     Box(
@@ -117,262 +103,196 @@ fun LibraryScreen(
             .fillMaxSize()
             .background(ObsidianBg)
     ) {
-        SonoraAmbientBackdrop(
-            accentColor = VioletPulse,
-            secondaryColor = accent
-        )
-
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding(),
-            contentPadding = PaddingValues(top = 14.dp, bottom = 164.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            contentPadding = PaddingValues(top = 12.dp, bottom = 148.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header & Actions
+            // Clean Top Bar
             item(key = "library_header") {
-                Column(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Text(
+                        text = "Your Library",
+                        style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextPrimary
+                    )
+
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Your Library",
-                                style = MaterialTheme.typography.displaySmall,
-                                color = TextPrimary
-                            )
-                            Text(
-                                text = "All Features Unlocked • Free Forever",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = onOpenCreatePlaylist,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = Color(0xFF04140A)
-                            ),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                            modifier = Modifier.weight(1f)
+                        Surface(
+                            shape = CircleShape,
+                            color = ObsidianCard,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .sonoraPressable(shape = CircleShape, onClick = onOpenImportDialog)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "New Playlist",
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.QrCode2,
+                                    contentDescription = "Import Share Code",
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = onOpenImportDialog,
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, ObsidianStroke),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                            modifier = Modifier.weight(1f)
+                        Surface(
+                            shape = CircleShape,
+                            color = ObsidianCard,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .sonoraPressable(shape = CircleShape, onClick = onOpenCreatePlaylist)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.QrCode2,
-                                contentDescription = null,
-                                tint = CyanGlow,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Import Code",
-                                color = TextPrimary,
-                                maxLines = 1
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = "Create Playlist",
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            // Animated Sonora Wrapped Promo Card
-            item(key = "wrapped_promo") {
-                WrappedPromoBanner(
-                    totalMinutes = state.wrappedStats.totalMinutes,
-                    totalPlays = state.wrappedStats.totalPlays,
-                    personaTitle = state.wrappedStats.personaTitle,
-                    onClick = { actions.openWrapped() },
-                    modifier = Modifier.padding(horizontal = 20.dp)
-                )
-            }
-
-            // Filter Chips
+            // Flat Filter Chips
             item(key = "library_filters") {
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(LibraryFilter.entries, key = { it.name }) { filter ->
                         SonoraPillChip(
                             label = filter.label,
                             selected = selectedFilter == filter,
+                            accentColor = EmeraldAccent,
                             onClick = { selectedFilter = filter }
                         )
                     }
                 }
             }
 
-            // Pinned Collections: Liked Songs & Offline Downloads
+            // Pinned Collections: Liked Songs & Downloads
             if (selectedFilter == LibraryFilter.ALL ||
                 selectedFilter == LibraryFilter.LIKED ||
                 selectedFilter == LibraryFilter.DOWNLOADS
             ) {
-                item(key = "pinned_collections") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        SonoraSectionHeader(
-                            title = "Pinned Collections",
-                            subtitle = "Instant offline & favorites access"
+                if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.LIKED) {
+                    item(key = "pinned_liked") {
+                        PinnedLibraryRow(
+                            title = "Liked Songs",
+                            subtitle = "Playlist • ${library.likedSongs.size} songs",
+                            icon = Icons.Rounded.Favorite,
+                            coverBrush = Brush.linearGradient(
+                                listOf(Color(0xFF4527A0), Color(0xFF281A5E))
+                            ),
+                            onClick = { actions.openDetail(DetailRoute.LikedSongs) },
+                            onQuickPlay = if (library.likedSongs.isNotEmpty()) {
+                                { actions.playTrack(library.likedSongs.first(), library.likedSongs) }
+                            } else null
                         )
-
-                        if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.LIKED) {
-                            PinnedCollectionCard(
-                                title = "Liked Songs",
-                                subtitle = "${library.likedSongs.size} favorite tracks",
-                                icon = Icons.Rounded.Favorite,
-                                gradientStart = CoralHeart,
-                                gradientEnd = Color(0xFF471127),
-                                badge = "PINNED",
-                                onClick = { actions.openDetail(DetailRoute.LikedSongs) },
-                                onQuickPlay = if (library.likedSongs.isNotEmpty()) {
-                                    { actions.playTrack(library.likedSongs.first(), library.likedSongs) }
-                                } else null
-                            )
-                        }
-
-                        if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.DOWNLOADS) {
-                            val mbUsed = formatBytesMb(library.totalDownloadedBytes)
-                            PinnedCollectionCard(
-                                title = "Offline Downloads",
-                                subtitle = "${library.downloadedTracks.size} tracks • $mbUsed stored",
-                                icon = Icons.Rounded.DownloadDone,
-                                gradientStart = EmeraldAccent,
-                                gradientEnd = Color(0xFF0A2E2A),
-                                badge = mbUsed,
-                                onClick = { actions.openDetail(DetailRoute.Downloads) },
-                                onQuickPlay = if (library.downloadedTracks.isNotEmpty()) {
-                                    { actions.playTrack(library.downloadedTracks.first(), library.downloadedTracks) }
-                                } else null
-                            )
-                        }
                     }
                 }
-            }
 
-            // Jam / Party Queue Card
-            if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.JAM) {
-                item(key = "jam_queue_card") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        SonoraSectionHeader(
-                            title = "Jam & Live Queue",
-                            subtitle = "Collaborative shareable playback queue"
-                        )
-                        PinnedCollectionCard(
-                            title = "Jam / Party Queue",
-                            subtitle = if (state.playback.queue.isEmpty()) {
-                                "Queue is ready — merge a friend's code or start playing"
-                            } else {
-                                "${state.playback.queue.size} tracks in queue • Tap to manage & share"
-                            },
-                            icon = Icons.Rounded.Groups,
-                            gradientStart = VioletPulse,
-                            gradientEnd = Color(0xFF1B1540),
-                            badge = if (state.playback.queue.isEmpty()) "READY" else "${state.playback.queue.size} UP",
-                            onClick = { actions.openDetail(DetailRoute.JamQueue) },
-                            onQuickPlay = if (state.playback.queue.isNotEmpty()) {
-                                { actions.openQueue() }
+                if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.DOWNLOADS) {
+                    item(key = "pinned_downloads") {
+                        val mbUsed = formatBytesMb(library.totalDownloadedBytes)
+                        PinnedLibraryRow(
+                            title = "Downloads",
+                            subtitle = "${library.downloadedTracks.size} tracks • $mbUsed",
+                            icon = Icons.Rounded.DownloadDone,
+                            coverBrush = Brush.linearGradient(
+                                listOf(EmeraldDeep, Color(0xFF0E3820))
+                            ),
+                            onClick = { actions.openDetail(DetailRoute.Downloads) },
+                            onQuickPlay = if (library.downloadedTracks.isNotEmpty()) {
+                                { actions.playTrack(library.downloadedTracks.first(), library.downloadedTracks) }
                             } else null
                         )
                     }
                 }
             }
 
-            // User Playlists Section
-            if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.PLAYLISTS) {
-                item(key = "playlists_header") {
-                    SonoraSectionHeader(
-                        title = "Your Playlists (${library.userPlaylists.size})",
-                        subtitle = "Reorder, export codes & listen offline",
-                        actionLabel = "+ New",
-                        onActionClick = onOpenCreatePlaylist,
-                        modifier = Modifier.padding(horizontal = 20.dp)
+            // Jam Queue Row
+            if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.JAM) {
+                item(key = "jam_queue_row") {
+                    PinnedLibraryRow(
+                        title = "Jam Queue",
+                        subtitle = if (state.playback.queue.isEmpty()) {
+                            "Share or merge queue codes"
+                        } else {
+                            "${state.playback.queue.size} tracks queued"
+                        },
+                        icon = Icons.Rounded.Groups,
+                        coverBrush = Brush.linearGradient(
+                            listOf(ObsidianCard, ObsidianCard)
+                        ),
+                        onClick = { actions.openDetail(DetailRoute.JamQueue) },
+                        onQuickPlay = if (state.playback.queue.isNotEmpty()) {
+                            { actions.openQueue() }
+                        } else null
                     )
+                }
+            }
+
+            // User Playlists
+            if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.PLAYLISTS) {
+                if (selectedFilter == LibraryFilter.ALL && library.userPlaylists.isNotEmpty()) {
+                    item(key = "playlists_divider") {
+                        HorizontalDivider(
+                            color = ObsidianStroke,
+                            thickness = 1.dp,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
                 }
 
                 if (library.userPlaylists.isEmpty()) {
                     item(key = "playlists_empty") {
-                        Surface(
-                            shape = RoundedCornerShape(18.dp),
-                            color = ObsidianCard,
-                            border = BorderStroke(1.dp, ObsidianStrokeSoft),
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp)
-                                .sonoraPressable(shape = RoundedCornerShape(18.dp), onClick = onOpenCreatePlaylist)
+                                .clickable(onClick = onOpenCreatePlaylist)
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(18.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(ObsidianCard),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(accent.copy(alpha = 0.16f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                                        contentDescription = null,
-                                        tint = accent,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(14.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Create your first playlist",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = TextPrimary
-                                    )
-                                    Text(
-                                        text = "Pick a cover gradient or import a SONORA-PL-V1 code",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = TextSecondary
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Create playlist",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "Build a mix or import a code",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
                             }
                         }
                     }
@@ -387,71 +307,77 @@ fun LibraryScreen(
                                 } else {
                                     actions.openDetail(DetailRoute.PlaylistDetail(playlist))
                                 }
-                            },
-                            modifier = Modifier.padding(horizontal = 20.dp)
+                            }
                         )
                     }
                 }
             }
 
-            // Liked Quick Preview when specifically filtered to Liked
+            // Liked Preview when filtered to Liked
             if (selectedFilter == LibraryFilter.LIKED && library.likedSongs.isNotEmpty()) {
-                items(library.likedSongs.take(12), key = { "lib_liked_${it.id}" }) { track ->
+                item(key = "liked_tracks_header") {
+                    SonoraSectionHeader(
+                        title = "Songs",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                items(library.likedSongs.take(15), key = { "lib_liked_${it.id}" }) { track ->
                     val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = true,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, library.likedSongs) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
-                                }
-                            },
-                            onMoreClick = { onTrackOverflow(track) }
-                        )
-                    }
+                    TrackRow(
+                        track = track,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = true,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, library.likedSongs) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) }
+                    )
                 }
             }
 
-            // Downloads Quick Preview when specifically filtered to Downloads
+            // Downloads Preview when filtered to Downloads
             if (selectedFilter == LibraryFilter.DOWNLOADS && library.downloadedTracks.isNotEmpty()) {
-                items(library.downloadedTracks.take(12), key = { "lib_dl_${it.id}" }) { track ->
+                item(key = "dl_tracks_header") {
+                    SonoraSectionHeader(
+                        title = "Downloaded",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+                items(library.downloadedTracks.take(15), key = { "lib_dl_${it.id}" }) { track ->
                     val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, library.downloadedTracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = { actions.deleteDownload(track.id) },
-                            onMoreClick = { onTrackOverflow(track) }
-                        )
-                    }
+                    TrackRow(
+                        track = track,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, library.downloadedTracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = { actions.deleteDownload(track.id) },
+                        onMoreClick = { onTrackOverflow(track) }
+                    )
                 }
             }
 
-            // Local Files Section
+            // Local Files Scan Card
             if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.LOCAL) {
                 item(key = "local_files_section") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         SonoraSectionHeader(
-                            title = "Local Device Audio",
-                            subtitle = "Play MP3, FLAC, WAV & M4A stored on your phone",
+                            title = "Local Files",
                             actionLabel = if (library.localTracks.isNotEmpty()) "View All" else null,
                             onActionClick = { actions.openDetail(DetailRoute.LocalFiles) }
                         )
@@ -471,19 +397,17 @@ fun LibraryScreen(
                     val previewCount = if (selectedFilter == LibraryFilter.LOCAL) 15 else 4
                     items(library.localTracks.take(previewCount), key = { "lib_local_${it.id}" }) { track ->
                         val isCurrent = state.playback.currentTrack?.id == track.id
-                        Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                            TrackRow(
-                                track = track,
-                                isCurrent = isCurrent,
-                                isPlaying = isCurrent && state.playback.isPlaying,
-                                isLiked = track.id in state.likedTrackIds,
-                                downloadState = null,
-                                onClick = { actions.playTrack(track, library.localTracks) },
-                                onLikeClick = { actions.toggleLike(track) },
-                                onDownloadClick = {},
-                                onMoreClick = { onTrackOverflow(track) }
-                            )
-                        }
+                        TrackRow(
+                            track = track,
+                            isCurrent = isCurrent,
+                            isPlaying = isCurrent && state.playback.isPlaying,
+                            isLiked = track.id in state.likedTrackIds,
+                            downloadState = null,
+                            onClick = { actions.playTrack(track, library.localTracks) },
+                            onLikeClick = { actions.toggleLike(track) },
+                            onDownloadClick = {},
+                            onMoreClick = { onTrackOverflow(track) }
+                        )
                     }
                 }
             }
@@ -492,197 +416,76 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun WrappedPromoBanner(
-    totalMinutes: Int,
-    totalPlays: Int,
-    personaTitle: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val infinite = rememberInfiniteTransition(label = "wrapped_glow")
-    val glowAlpha by infinite.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 0.90f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "wrapped_alpha"
-    )
-
-    Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = ObsidianCard,
-        border = BorderStroke(
-            1.3.dp,
-            Brush.linearGradient(
-                listOf(
-                    EmeraldAccent.copy(alpha = glowAlpha),
-                    CyanGlow.copy(alpha = glowAlpha),
-                    VioletPulse.copy(alpha = glowAlpha)
-                )
-            )
-        ),
-        modifier = modifier
-            .fillMaxWidth()
-            .sonoraPressable(shape = RoundedCornerShape(22.dp), onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            EmeraldAccent.copy(alpha = 0.20f),
-                            CyanGlow.copy(alpha = 0.14f),
-                            VioletPulse.copy(alpha = 0.22f)
-                        )
-                    )
-                )
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(
-                        Brush.linearGradient(listOf(EmeraldAccent, CyanGlow, VioletPulse))
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = ObsidianBg,
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Sonora Wrapped",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = TextPrimary
-                    )
-                    SonoraBadge(text = "5 SLIDES", tint = AmberGold)
-                }
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = "$totalMinutes min • $totalPlays plays • $personaTitle",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = "Open Wrapped",
-                tint = TextPrimary,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun PinnedCollectionCard(
+private fun PinnedLibraryRow(
     title: String,
     subtitle: String,
     icon: ImageVector,
-    gradientStart: Color,
-    gradientEnd: Color,
-    badge: String,
+    coverBrush: Brush,
     onClick: () -> Unit,
     onQuickPlay: (() -> Unit)?
 ) {
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = ObsidianCard,
-        border = BorderStroke(1.dp, gradientStart.copy(alpha = 0.34f)),
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .sonoraPressable(shape = RoundedCornerShape(18.dp), onClick = onClick)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        Box(
             modifier = Modifier
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            gradientStart.copy(alpha = 0.14f),
-                            ObsidianCard
-                        )
-                    )
-                )
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .size(56.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(coverBrush),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (onQuickPlay != null) {
+            Surface(
+                shape = CircleShape,
+                color = ObsidianCard,
                 modifier = Modifier
-                    .size(54.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Brush.linearGradient(listOf(gradientStart, gradientEnd))),
-                contentAlignment = Alignment.Center
+                    .size(34.dp)
+                    .sonoraPressable(shape = CircleShape, onClick = onQuickPlay)
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = "Play",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(19.dp)
                     )
-                    SonoraBadge(text = badge, tint = gradientStart)
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
-            if (onQuickPlay != null) {
-                Surface(
-                    shape = CircleShape,
-                    color = gradientStart.copy(alpha = 0.22f),
-                    modifier = Modifier
-                        .size(38.dp)
-                        .sonoraPressable(shape = CircleShape, onClick = onQuickPlay)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
-                            contentDescription = "Quick play",
-                            tint = gradientStart,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.ChevronRight,
-                    contentDescription = null,
-                    tint = TextMuted
-                )
-            }
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = TextMuted
+            )
         }
     }
 }
@@ -691,69 +494,56 @@ private fun PinnedCollectionCard(
 private fun UserPlaylistRow(
     playlist: Playlist,
     onClick: () -> Unit,
-    onQuickPlay: () -> Unit,
-    modifier: Modifier = Modifier
+    onQuickPlay: () -> Unit
 ) {
     val count = maxOf(playlist.tracks.size, playlist.trackIds.size)
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = ObsidianCard,
-        border = BorderStroke(1.dp, ObsidianStrokeSoft),
-        modifier = modifier
+    Row(
+        modifier = Modifier
             .fillMaxWidth()
-            .sonoraPressable(shape = RoundedCornerShape(16.dp), onClick = onClick)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SonoraArtwork(
-                artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
-                title = playlist.name,
-                cornerRadius = 12.dp,
-                colorStart = playlist.coverColorStart,
-                colorEnd = playlist.coverColorEnd,
-                modifier = Modifier.size(56.dp)
+        SonoraArtwork(
+            artworkUrl = playlist.artworkUrl ?: playlist.tracks.firstOrNull()?.artworkUrl,
+            title = playlist.name,
+            cornerRadius = 4.dp,
+            colorStart = playlist.coverColorStart,
+            colorEnd = playlist.coverColorEnd,
+            modifier = Modifier.size(56.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = playlist.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = playlist.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Playlist • $count tracks",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Surface(
+            shape = CircleShape,
+            color = ObsidianCard,
+            modifier = Modifier
+                .size(34.dp)
+                .sonoraPressable(shape = CircleShape, onClick = onQuickPlay)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "Play playlist",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(19.dp)
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = buildString {
-                        append("$count tracks")
-                        if (playlist.description.isNotBlank()) {
-                            append(" • ")
-                            append(playlist.description)
-                        }
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Surface(
-                shape = CircleShape,
-                color = ObsidianCardElevated,
-                modifier = Modifier
-                    .size(36.dp)
-                    .sonoraPressable(shape = CircleShape, onClick = onQuickPlay)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = "Play playlist",
-                        tint = Color(playlist.coverColorStart),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
             }
         }
     }
@@ -769,44 +559,44 @@ private fun LocalFilesCard(
     onOpenAll: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = ObsidianCard,
-        border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.28f)),
+        shape = RoundedCornerShape(8.dp),
+        color = ObsidianSurface,
+        border = BorderStroke(1.dp, ObsidianStroke),
         modifier = Modifier
             .fillMaxWidth()
             .sonoraPressable(
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(8.dp),
                 onClick = if (hasPermission) onOpenAll else onRequestPermission
             )
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(CyanGlow.copy(alpha = 0.16f)),
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(ObsidianCard),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (hasPermission) Icons.Rounded.LibraryMusic else Icons.Rounded.FolderOpen,
                         contentDescription = null,
-                        tint = CyanGlow,
-                        modifier = Modifier.size(24.dp)
+                        tint = TextPrimary,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (hasPermission) "Device Audio ($trackCount files)" else "Enable Local Audio Playback",
+                        text = if (hasPermission) "Device Audio ($trackCount files)" else "Show Local Audio Files",
                         style = MaterialTheme.typography.titleMedium,
                         color = TextPrimary
                     )
                     Text(
                         text = if (hasPermission) {
-                            "Scan storage to discover newly added songs"
+                            "Scan storage for MP3, FLAC, WAV, and M4A files"
                         } else {
-                            "Grant media audio permission to play local MP3/FLAC files"
+                            "Allow audio access to play files on this device"
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
@@ -819,20 +609,14 @@ private fun LocalFilesCard(
             if (!hasPermission) {
                 Button(
                     onClick = onRequestPermission,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = CyanGlow,
-                        contentColor = ObsidianBg
+                        containerColor = EmeraldAccent,
+                        contentColor = Color.Black
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Grant Audio Access", fontWeight = FontWeight.Bold)
+                    Text("Grant Access", fontWeight = FontWeight.Bold)
                 }
             } else {
                 Row(
@@ -842,27 +626,27 @@ private fun LocalFilesCard(
                     OutlinedButton(
                         onClick = onScanDevice,
                         enabled = !isScanning,
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.55f)),
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, ObsidianStroke),
                         modifier = Modifier.weight(1f)
                     ) {
                         if (isScanning) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = CyanGlow,
+                                modifier = Modifier.size(15.dp),
+                                color = EmeraldAccent,
                                 strokeWidth = 2.dp
                             )
                         } else {
                             Icon(
                                 imageVector = Icons.Rounded.Refresh,
                                 contentDescription = null,
-                                tint = CyanGlow,
+                                tint = TextPrimary,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isScanning) "Scanning..." else "Scan Device Audio",
+                            text = if (isScanning) "Scanning..." else "Scan Device",
                             color = TextPrimary
                         )
                     }
@@ -870,10 +654,10 @@ private fun LocalFilesCard(
                     if (trackCount > 0) {
                         Button(
                             onClick = onOpenAll,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = CircleShape,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = CyanGlow,
-                                contentColor = ObsidianBg
+                                containerColor = EmeraldAccent,
+                                contentColor = Color.Black
                             )
                         ) {
                             Text("Browse", fontWeight = FontWeight.Bold)

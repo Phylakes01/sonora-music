@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap
 class DownloadManager(
     private val context: Context,
     private val store: SonoraStore,
-    private val client: OkHttpClient = HttpClientProvider.client
+    private val client: OkHttpClient = HttpClientProvider.client,
+    private val streamUrlResolver: suspend (Track) -> String = { it.streamUrl }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val downloadsDir = File(context.filesDir, "downloads").apply { mkdirs() }
@@ -56,7 +57,10 @@ class DownloadManager(
     }
 
     fun downloadTrack(track: Track) {
-        if (track.isLive || track.source == TrackSource.LOCAL || track.streamUrl.isBlank()) {
+        if (track.isLive ||
+            track.source == TrackSource.LOCAL ||
+            (track.streamUrl.isBlank() && track.source != TrackSource.DEEZER)
+        ) {
             return
         }
         val existingFile = getOfflineFile(track.id)
@@ -134,13 +138,23 @@ class DownloadManager(
         return files.sumOf { if (it.isFile && !it.name.endsWith(".part")) it.length() else 0L }
     }
 
-    private fun performDownload(track: Track) {
+    private suspend fun performDownload(track: Track) {
         val part = partFile(track.id)
         val dest = targetFile(track.id)
         part.delete()
 
+        val resolvedUrl = if (track.source == TrackSource.DEEZER) {
+            val fresh = runCatching { streamUrlResolver(track) }.getOrDefault("")
+            fresh.takeIf { it.startsWith("http", ignoreCase = true) } ?: track.streamUrl
+        } else {
+            track.streamUrl
+        }
+        if (resolvedUrl.isBlank()) {
+            throw IOException("Missing stream URL for track ${track.id}")
+        }
+
         val request = Request.Builder()
-            .url(track.streamUrl)
+            .url(resolvedUrl)
             .header("Accept", "*/*")
             .build()
 
@@ -199,7 +213,12 @@ class DownloadManager(
             part.delete()
         }
 
-        ensureTrackRecorded(track, dest)
+        val recordedTrack = if (resolvedUrl != track.streamUrl) {
+            track.copy(streamUrl = resolvedUrl)
+        } else {
+            track
+        }
+        ensureTrackRecorded(recordedTrack, dest)
     }
 
     private fun ensureTrackRecorded(track: Track, file: File) {

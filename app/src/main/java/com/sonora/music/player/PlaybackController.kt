@@ -27,6 +27,7 @@ import com.sonora.music.model.RepeatMode
 import com.sonora.music.model.ShuffleMode
 import com.sonora.music.model.SleepTimerState
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -156,13 +157,23 @@ object QueueEngine {
         ShuffleMode.SHUFFLE -> ShuffleMode.SMART_SHUFFLE
         ShuffleMode.SMART_SHUFFLE -> ShuffleMode.OFF
     }
+
+    private val EXP_TOKEN_REGEX = Regex("""\bexp=(\d+)""")
+
+    fun isStreamUrlFresh(streamUrl: String, nowEpochSeconds: Long = System.currentTimeMillis() / 1000L): Boolean {
+        if (streamUrl.isBlank()) return false
+        val match = EXP_TOKEN_REGEX.find(streamUrl) ?: return true
+        val expSec = match.groupValues.getOrNull(1)?.toLongOrNull() ?: return true
+        return expSec > nowEpochSeconds + 60L
+    }
 }
 
 class PlaybackController(
     private val context: Context,
     private val downloadManager: DownloadManager,
     private val smartPickProvider: suspend (List<Track>, Set<String>) -> List<Track>,
-    private val onTrackListened: (Track, Long) -> Unit
+    private val onTrackListened: (Track, Long) -> Unit,
+    private val streamUrlResolver: suspend (Track) -> String = { it.streamUrl }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val effectsManager = AudioEffectsManager()
@@ -190,6 +201,8 @@ class PlaybackController(
     private var sleepTimerJob: Job? = null
     private var smartShuffleJob: Job? = null
     private var sessionObserverJob: Job? = null
+    private var streamRefreshJob: Job? = null
+    private val retriedStreamTrackIds = HashSet<String>()
 
     private var trackedTrack: Track? = null
     private var accumulatedListenMs: Long = 0L
@@ -225,6 +238,7 @@ class PlaybackController(
 
             if (prevTrack != null && prevTrack.id != nextTrack?.id) {
                 flushListenTracker(forceIfMinimumMet = true)
+                retriedStreamTrackIds.remove(prevTrack.id)
             }
 
             if (newIdx in currentQueue.indices) {
@@ -247,6 +261,10 @@ class PlaybackController(
 
             _playbackState.update { it.copy(errorMessage = null) }
             syncPlaybackStateFromPlayer()
+
+            if (nextTrack != null && newIdx in currentQueue.indices && needsStreamResolution(nextTrack)) {
+                resolveAndUpdateTransitionTrack(newIdx, nextTrack)
+            }
         }
 
         override fun onPositionDiscontinuity(
@@ -263,6 +281,19 @@ class PlaybackController(
 
         override fun onPlayerError(error: PlaybackException) {
             setPlayerVolume(1f)
+            val controller = mediaController
+            val failedIndex = controller?.currentMediaItemIndex?.takeIf { it in currentQueue.indices } ?: currentIndex
+            val failedTrack = currentQueue.getOrNull(failedIndex)
+            if (controller != null &&
+                failedTrack != null &&
+                hasRemoteDeezerStream(failedTrack) &&
+                retriedStreamTrackIds.add(failedTrack.id)
+            ) {
+                _playbackState.update { it.copy(isBuffering = true, errorMessage = null) }
+                retryTrackWithFreshUrl(controller, failedIndex, failedTrack, error)
+                return
+            }
+
             _playbackState.update {
                 it.copy(
                     isPlaying = false,
@@ -339,6 +370,7 @@ class PlaybackController(
         sleepTimerJob?.cancel()
         smartShuffleJob?.cancel()
         sessionObserverJob?.cancel()
+        streamRefreshJob?.cancel()
 
         effectsManager.release()
         mediaController?.removeListener(playerListener)
@@ -353,6 +385,8 @@ class PlaybackController(
 
         flushListenTracker(forceIfMinimumMet = true)
         smartShuffleJob?.cancel()
+        streamRefreshJob?.cancel()
+        retriedStreamTrackIds.clear()
 
         val clampedStart = startIndex.coerceIn(0, tracks.lastIndex)
         originalQueue = tracks.toList()
@@ -396,9 +430,52 @@ class PlaybackController(
     }
 
     private fun applyCurrentQueueToController(controller: MediaController) {
+        val safeIndex = currentIndex.coerceIn(0, (currentQueue.size - 1).coerceAtLeast(0))
+        val activeTrack = currentQueue.getOrNull(safeIndex)
+
+        if (activeTrack != null && needsStreamResolution(activeTrack)) {
+            streamRefreshJob?.cancel()
+            streamRefreshJob = scope.launch {
+                val freshUrl = withContext(Dispatchers.IO) {
+                    runCatching { streamUrlResolver(activeTrack) }.getOrDefault("")
+                }
+                if (isReleased) return@launch
+                if (currentQueue.getOrNull(safeIndex)?.id != activeTrack.id) return@launch
+
+                val effectiveUrl = freshUrl.takeIf { it.startsWith("http", ignoreCase = true) }
+                    ?: activeTrack.streamUrl
+                if (effectiveUrl.isBlank()) {
+                    _playbackState.update {
+                        it.copy(
+                            isPlaying = false,
+                            isBuffering = false,
+                            errorMessage = "Preview unavailable for ${activeTrack.title}"
+                        )
+                    }
+                    return@launch
+                }
+
+                if (effectiveUrl != activeTrack.streamUrl) {
+                    updateTrackStreamUrlInQueues(activeTrack.id, effectiveUrl)
+                }
+                startControllerQueue(controller, safeIndex)
+            }
+            return
+        }
+
+        startControllerQueue(controller, safeIndex)
+
+        // Proactively refresh Deezer preview URL in background if needed without interrupting fresh streams
+        if (activeTrack != null && hasRemoteDeezerStream(activeTrack)) {
+            refreshActiveTrackInBackgroundIfChanged(controller, safeIndex, activeTrack)
+        }
+    }
+
+    private fun startControllerQueue(controller: MediaController, safeIndex: Int) {
         val items = currentQueue.map(::toMediaItem)
-        val safeIndex = currentIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
-        controller.setMediaItems(items, safeIndex, 0L)
+        if (items.isEmpty()) return
+        val clamped = safeIndex.coerceIn(0, items.lastIndex)
+        controller.setMediaItems(items, clamped, 0L)
         controller.repeatMode = toMedia3RepeatMode(repeatMode)
         controller.setPlaybackSpeed(audioSettings.playbackSpeed.coerceIn(0.5f, 2.5f))
         setPlayerVolume(1f)
@@ -408,6 +485,124 @@ class PlaybackController(
         if (shuffleMode == ShuffleMode.SMART_SHUFFLE) {
             launchSmartShuffleWeave()
         }
+    }
+
+    private fun refreshActiveTrackInBackgroundIfChanged(
+        controller: MediaController,
+        index: Int,
+        track: Track
+    ) {
+        streamRefreshJob?.cancel()
+        streamRefreshJob = scope.launch {
+            val freshUrl = withContext(Dispatchers.IO) {
+                runCatching { streamUrlResolver(track) }.getOrDefault("")
+            }
+            if (isReleased) return@launch
+            if (!freshUrl.startsWith("http", ignoreCase = true) || freshUrl == track.streamUrl) return@launch
+            if (currentQueue.getOrNull(index)?.id != track.id) return@launch
+
+            val updatedTrack = updateTrackStreamUrlInQueues(track.id, freshUrl) ?: track.copy(streamUrl = freshUrl)
+            // Only swap the MediaItem if playback has not started playing smoothly yet
+            if (controller.currentMediaItemIndex == index && !controller.isPlaying && index < controller.mediaItemCount) {
+                controller.replaceMediaItem(index, toMediaItem(updatedTrack))
+                controller.prepare()
+                controller.play()
+            }
+        }
+    }
+
+    private fun resolveAndUpdateTransitionTrack(index: Int, track: Track) {
+        streamRefreshJob?.cancel()
+        streamRefreshJob = scope.launch {
+            val freshUrl = withContext(Dispatchers.IO) {
+                runCatching { streamUrlResolver(track) }.getOrDefault("")
+            }
+            if (isReleased) return@launch
+            if (!freshUrl.startsWith("http", ignoreCase = true) || freshUrl == track.streamUrl) return@launch
+            if (currentQueue.getOrNull(index)?.id != track.id) return@launch
+
+            val updatedTrack = updateTrackStreamUrlInQueues(track.id, freshUrl) ?: track.copy(streamUrl = freshUrl)
+            val controller = mediaController ?: return@launch
+            if (index < controller.mediaItemCount) {
+                controller.replaceMediaItem(index, toMediaItem(updatedTrack))
+                if (controller.currentMediaItemIndex == index) {
+                    controller.seekTo(index, 0L)
+                    controller.prepare()
+                    controller.play()
+                }
+            }
+        }
+    }
+
+    private fun retryTrackWithFreshUrl(
+        controller: MediaController,
+        failedIndex: Int,
+        failedTrack: Track,
+        error: PlaybackException
+    ) {
+        streamRefreshJob?.cancel()
+        streamRefreshJob = scope.launch {
+            val freshUrl = withContext(Dispatchers.IO) {
+                runCatching { streamUrlResolver(failedTrack) }.getOrDefault("")
+            }
+            if (isReleased) return@launch
+            if (currentQueue.getOrNull(failedIndex)?.id != failedTrack.id) return@launch
+
+            if (freshUrl.startsWith("http", ignoreCase = true) && freshUrl != failedTrack.streamUrl) {
+                val updatedTrack = updateTrackStreamUrlInQueues(failedTrack.id, freshUrl)
+                    ?: failedTrack.copy(streamUrl = freshUrl)
+                if (failedIndex < controller.mediaItemCount) {
+                    controller.replaceMediaItem(failedIndex, toMediaItem(updatedTrack))
+                    controller.seekTo(failedIndex, 0L)
+                    controller.prepare()
+                    controller.play()
+                    return@launch
+                }
+            }
+
+            _playbackState.update {
+                it.copy(
+                    isPlaying = false,
+                    isBuffering = false,
+                    errorMessage = error.localizedMessage ?: "Playback failed for this stream"
+                )
+            }
+        }
+    }
+
+    private fun hasRemoteDeezerStream(track: Track): Boolean {
+        return track.source == TrackSource.DEEZER &&
+            downloadManager.getOfflineFile(track.id) == null &&
+            track.localUri.isNullOrBlank()
+    }
+
+    private fun needsStreamResolution(track: Track): Boolean {
+        return hasRemoteDeezerStream(track) && !QueueEngine.isStreamUrlFresh(track.streamUrl)
+    }
+
+    private fun updateTrackStreamUrlInQueues(trackId: String, freshUrl: String): Track? {
+        var updatedSample: Track? = null
+        currentQueue = currentQueue.map { item ->
+            if (item.id == trackId) {
+                item.copy(streamUrl = freshUrl).also { updatedSample = it }
+            } else {
+                item
+            }
+        }
+        originalQueue = originalQueue.map { item ->
+            if (item.id == trackId) item.copy(streamUrl = freshUrl) else item
+        }
+        _playbackState.update { state ->
+            state.copy(
+                currentTrack = if (state.currentTrack?.id == trackId) {
+                    state.currentTrack.copy(streamUrl = freshUrl)
+                } else {
+                    state.currentTrack
+                },
+                queue = currentQueue
+            )
+        }
+        return updatedSample
     }
 
     fun togglePlayPause() {

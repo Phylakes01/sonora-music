@@ -2,9 +2,9 @@ package com.sonora.music
 
 import com.sonora.music.data.local.SonoraStore
 import com.sonora.music.data.network.AudiobookApi
-import com.sonora.music.data.network.AudiusApi
 import com.sonora.music.data.network.HttpClientProvider
 import com.sonora.music.data.network.LyricsApi
+import com.sonora.music.data.network.MusicCatalogApi
 import com.sonora.music.data.network.PodcastApi
 import com.sonora.music.data.network.RadioApi
 import com.sonora.music.data.repository.RecommendationEngine
@@ -94,28 +94,30 @@ class DataLayerTest {
     @Test
     fun sonoraStore_persistsPlaylistsLikedFollowedSettingsHistoryAndSearches() {
         val sampleTrack = Track(
-            id = "tr_1",
-            title = "Emerald Horizon",
-            artist = "Nova Pulse",
-            artistId = "art_1",
-            album = "Afterglow",
-            genre = "Electronic",
-            mood = "Energetic",
-            durationSec = 215,
-            artworkUrl = "https://example.com/art.jpg",
-            artworkMirrors = listOf("https://mirror1.example.com"),
-            streamUrl = "https://api.audius.co/v1/tracks/tr_1/stream?app_name=Sonora",
-            source = TrackSource.AUDIUS,
-            playCount = 1234L
+            id = "dz_101",
+            title = "Multo",
+            artist = "Cup of Joe",
+            artistId = "60687062",
+            album = "Silakbo",
+            genre = "OPM",
+            mood = "Emotional",
+            durationSec = 238,
+            artworkUrl = "https://cdn-images.dzcdn.net/images/cover/multo/500x500.jpg",
+            artworkMirrors = listOf("https://cdn-images.dzcdn.net/images/cover/multo/1000x1000.jpg"),
+            streamUrl = "https://cdnt-preview.dzcdn.net/api/1/1/multo.mp3",
+            source = TrackSource.DEEZER,
+            playCount = 950_000L,
+            externalUrl = "https://www.deezer.com/track/101",
+            isPreviewOnly = true
         )
         val playlist = Playlist(
             id = "pl_custom_1",
-            name = "Late Night Synths",
-            description = "Cruising past midnight",
+            name = "Manila Night Drive",
+            description = "OPM & P-Pop essentials",
             trackIds = listOf(sampleTrack.id),
             tracks = listOf(sampleTrack),
-            coverColorStart = 0xFF00E5FFL,
-            coverColorEnd = 0xFF0F2744L,
+            coverColorStart = 0xFF1DB954L,
+            coverColorEnd = 0xFF121212L,
             artworkUrl = sampleTrack.artworkUrl,
             isUserCreated = true,
             isSystemMix = false,
@@ -129,13 +131,19 @@ class DataLayerTest {
         assertEquals(playlist, loadedPlaylists.first())
 
         store.saveLikedSongs(listOf(sampleTrack))
-        assertEquals(listOf(sampleTrack), store.loadLikedSongs())
+        val loadedLiked = store.loadLikedSongs()
+        assertEquals(listOf(sampleTrack), loadedLiked)
+        assertEquals("https://www.deezer.com/track/101", loadedLiked.first().externalUrl)
+        assertTrue(loadedLiked.first().isPreviewOnly)
 
-        store.saveFollowedArtistIds(setOf("art_1", "art_2"))
-        assertEquals(setOf("art_1", "art_2"), store.loadFollowedArtistIds())
+        store.saveFollowedArtistIds(setOf("60687062", "320392011"))
+        assertEquals(setOf("60687062", "320392011"), store.loadFollowedArtistIds())
 
-        store.saveDownloadedTracks(listOf(sampleTrack.copy(localUri = "file:///tmp/tr_1.mp3")))
-        assertEquals("file:///tmp/tr_1.mp3", store.loadDownloadedTracks().first().localUri)
+        store.saveDownloadedTracks(listOf(sampleTrack.copy(localUri = "file:///tmp/dz_101.mp3")))
+        val loadedDownload = store.loadDownloadedTracks().first()
+        assertEquals("file:///tmp/dz_101.mp3", loadedDownload.localUri)
+        assertEquals("https://www.deezer.com/track/101", loadedDownload.externalUrl)
+        assertTrue(loadedDownload.isPreviewOnly)
 
         val settings = AudioSettings(
             eqEnabled = false,
@@ -146,7 +154,7 @@ class DataLayerTest {
             crossfadeSeconds = 6,
             playbackSpeed = 1.25f,
             privateSession = true,
-            streamingQualityLabel = "High Stream"
+            streamingQualityLabel = "High Quality"
         )
         store.saveAudioSettings(settings)
         assertEquals(settings, store.loadAudioSettings())
@@ -166,7 +174,7 @@ class DataLayerTest {
                     trackId = "t_$i",
                     title = "Track $i",
                     artist = "Artist",
-                    genre = "Electronic",
+                    genre = "OPM",
                     listenedMs = 60_000L,
                     timestampMs = i.toLong()
                 )
@@ -182,45 +190,49 @@ class DataLayerTest {
     fun sonoraStore_playlistCodeRoundTrip_supportsPrefixDeepLinkAndRawJson() {
         val tracks = listOf(
             Track(
-                id = "a1",
-                title = "Solaris",
-                artist = "Kairo",
-                durationSec = 190,
-                streamUrl = "https://api.audius.co/v1/tracks/a1/stream?app_name=Sonora",
-                source = TrackSource.AUDIUS
+                id = "dz_201",
+                title = "Pantropiko",
+                artist = "BINI",
+                durationSec = 225,
+                streamUrl = "https://cdnt-preview.dzcdn.net/api/1/1/pantropiko.mp3",
+                source = TrackSource.DEEZER,
+                externalUrl = "https://www.deezer.com/track/201",
+                isPreviewOnly = true
             ),
             Track(
-                id = "a2",
-                title = "Velocity",
-                artist = "Mina",
-                durationSec = 240,
-                streamUrl = "https://api.audius.co/v1/tracks/a2/stream?app_name=Sonora",
-                source = TrackSource.AUDIUS
+                id = "it_202",
+                title = "sining",
+                artist = "Dionela",
+                durationSec = 210,
+                streamUrl = "https://audio-ssl.itunes.apple.com/sining.m4a",
+                source = TrackSource.ITUNES,
+                externalUrl = "https://music.apple.com/ph/album/sining",
+                isPreviewOnly = true
             )
         )
 
         val code = store.encodePlaylistCode(
-            name = "Cyberpunk Run",
-            description = "Neon cardio fuel",
+            name = "PH Top Mix",
+            description = "OPM & P-Pop rotation",
             tracks = tracks,
-            colorStart = 0xFF1ED760L,
-            colorEnd = 0xFF0A2E2AL
+            colorStart = 0xFF1DB954L,
+            colorEnd = 0xFF121212L
         )
         assertTrue(code.startsWith("SONORA-PL-V1:"))
 
         val decodedDirect = store.decodePlaylistCode(code)
         assertNotNull(decodedDirect)
-        assertEquals("Cyberpunk Run", decodedDirect!!.name)
-        assertEquals("Neon cardio fuel", decodedDirect.description)
-        assertEquals(0xFF1ED760L, decodedDirect.coverColorStart)
-        assertEquals(0xFF0A2E2AL, decodedDirect.coverColorEnd)
+        assertEquals("PH Top Mix", decodedDirect!!.name)
+        assertEquals("OPM & P-Pop rotation", decodedDirect.description)
+        assertEquals(0xFF1DB954L, decodedDirect.coverColorStart)
+        assertEquals(0xFF121212L, decodedDirect.coverColorEnd)
         assertEquals(tracks, decodedDirect.tracks)
-        assertEquals(listOf("a1", "a2"), decodedDirect.trackIds)
+        assertEquals(listOf("dz_201", "it_202"), decodedDirect.trackIds)
 
         val encodedQuery = URLEncoder.encode(code, StandardCharsets.UTF_8.name())
         val decodedDeepLink = store.decodePlaylistCode("sonora://playlist?code=$encodedQuery")
         assertNotNull(decodedDeepLink)
-        assertEquals("Cyberpunk Run", decodedDeepLink!!.name)
+        assertEquals("PH Top Mix", decodedDeepLink!!.name)
         assertEquals(tracks, decodedDeepLink.tracks)
 
         val rawJson = """{"name":"Raw Mix","description":"Direct JSON","tracks":[{"id":"x1","title":"Echo","artist":"Zen"}]}"""
@@ -229,6 +241,7 @@ class DataLayerTest {
         assertEquals("Raw Mix", decodedRaw!!.name)
         assertEquals(1, decodedRaw.tracks.size)
         assertEquals("Echo", decodedRaw.tracks.first().title)
+        assertEquals(TrackSource.DEEZER, decodedRaw.tracks.first().source)
 
         assertNull(store.decodePlaylistCode("not-a-valid-code"))
         assertNull(store.decodePlaylistCode(""))
@@ -236,7 +249,7 @@ class DataLayerTest {
 
     @Test
     fun recommendationEngine_parsePromptKeywords_extractsMoodGenresAndTerms() {
-        val engine = RecommendationEngine(AudiusApi())
+        val engine = RecommendationEngine(MusicCatalogApi())
 
         val (studyGenres, studyTerms) = engine.parsePromptKeywords("late night chill lofi study beats")
         assertTrue(studyGenres.contains("Lo-Fi"))
@@ -249,6 +262,10 @@ class DataLayerTest {
         assertTrue(gymGenres.contains("Hip-Hop/Rap"))
         assertTrue(gymTerms.contains("workout"))
 
+        val (opmGenres, opmTerms) = engine.parsePromptKeywords("late night opm hugot")
+        assertTrue(opmGenres.contains("OPM"))
+        assertTrue(opmTerms.contains("Cup of Joe"))
+
         val (defaultGenres, defaultTerms) = engine.parsePromptKeywords("")
         assertFalse(defaultGenres.isEmpty())
         assertFalse(defaultTerms.isEmpty())
@@ -256,12 +273,12 @@ class DataLayerTest {
 
     @Test
     fun recommendationEngine_computeWrapped_aggregatesTopItemsAndPersona() {
-        val engine = RecommendationEngine(AudiusApi())
+        val engine = RecommendationEngine(MusicCatalogApi())
 
         val emptyStats = engine.computeWrapped(emptyList(), emptyList())
         assertEquals(0, emptyStats.totalMinutes)
         assertEquals(0, emptyStats.totalPlays)
-        assertEquals("Sonic Explorer", emptyStats.personaTitle)
+        assertEquals("OPM & Global Listener", emptyStats.personaTitle)
 
         val history = listOf(
             ListeningEvent("t1", "Neon Sky", "Ayla", "Electronic", "https://art/1.jpg", 180_000L, 100L),
@@ -289,49 +306,359 @@ class DataLayerTest {
 
         assertEquals("Electronic", stats.topGenres.first().name)
         assertEquals(4, stats.topGenres.first().playCount)
-
         assertEquals("Neon Architect", stats.personaTitle)
+
+        val opmStats = engine.computeWrapped(
+            listOf(ListeningEvent("dz_1", "Multo", "Cup of Joe", "OPM", null, 240_000L, 10L)),
+            emptyList()
+        )
+        assertEquals("OPM Trailblazer", opmStats.personaTitle)
     }
 
     @Test
-    fun networkApis_parseMockPayloadsAndFallbackSafely() = runTest {
-        val mockClient = OkHttpClient.Builder()
+    fun musicCatalogApi_parsesDeezerItunesEnrichmentAndHandlesRateLimitsSafely() = runTest {
+        val mockClient = createCatalogMockClient()
+        val api = MusicCatalogApi(mockClient)
+
+        // 1. Playlist parsing strips dz_pl_ prefix, filters empty preview, sets externalUrl & isPreviewOnly
+        val playlistTracks = api.getPlaylistTracks("dz_pl_15507256221")
+        assertEquals(2, playlistTracks.size)
+        val first = playlistTracks.first()
+        assertEquals("dz_101", first.id)
+        assertEquals("Multo", first.title)
+        assertEquals("Cup of Joe", first.artist)
+        assertEquals("60687062", first.artistId)
+        assertEquals(TrackSource.DEEZER, first.source)
+        assertTrue(first.isPreviewOnly)
+        assertEquals("https://www.deezer.com/track/101", first.externalUrl)
+        assertEquals("https://cdn.dzcdn.net/cover/101/500x500.jpg", first.artworkUrl)
+        assertTrue(playlistTracks.none { it.id == "dz_999" })
+
+        // 2. getPhTopTracks merges Deezer 15507256221 + Apple PH chart enriched via iTunes PH (600x600 artwork upgrade)
+        val phTop = api.getPhTopTracks(limit = 10)
+        assertEquals(3, phTop.size)
+        val enrichedItunes = phTop.firstOrNull { it.source == TrackSource.ITUNES }
+        assertNotNull(enrichedItunes)
+        assertEquals("it_777", enrichedItunes!!.id)
+        assertTrue(enrichedItunes.isPreviewOnly)
+        assertEquals("https://is1-ssl.mzstatic.com/image/thumb/art/600x600bb.jpg", enrichedItunes.artworkUrl)
+
+        // 3. searchTracks falls back to iTunes PH when Deezer returns quota error object
+        val searchFallback = api.searchTracks("rate_limited_query", limit = 10)
+        assertEquals(1, searchFallback.size)
+        assertEquals(TrackSource.ITUNES, searchFallback.first().source)
+        assertEquals("it_777", searchFallback.first().id)
+
+        // 4. searchArtists sorts by highest nb_fan descending
+        val artists = api.searchArtists("bini", limit = 10)
+        assertEquals(2, artists.size)
+        assertEquals("BINI", artists[0].name)
+        assertEquals(25000L, artists[0].followerCount)
+        assertEquals("Other Artist", artists[1].name)
+
+        // 5. Rate-limited /artist/{id} never throws or returns empty curated artist shelves
+        val phArtists = api.getPhTrendingArtists()
+        assertEquals(18, phArtists.size)
+        assertTrue(phArtists.any { it.name == "Cup of Joe" && !it.avatarUrl.isNullOrBlank() })
+        assertTrue(phArtists.any { it.name == "BINI" && !it.avatarUrl.isNullOrBlank() })
+
+        val globalArtists = api.getGlobalTrendingArtists()
+        assertEquals(11, globalArtists.size)
+        assertTrue(globalArtists.any { it.name == "Taylor Swift" && !it.avatarUrl.isNullOrBlank() })
+
+        // 6. resolveFreshStreamUrl calls /track/{id} for fresh preview URL
+        val refreshedUrl = api.resolveFreshStreamUrl(
+            first.copy(streamUrl = "https://stale-preview.example.com/old.mp3")
+        )
+        assertEquals("https://cdnt-preview.dzcdn.net/fresh/101.mp3", refreshedUrl)
+    }
+
+    @Test
+    fun recommendationEngine_buildsMadeForYouSmartShuffleRadioAndMoodMix() = runTest {
+        val api = MusicCatalogApi(createCatalogMockClient())
+        val engine = RecommendationEngine(api)
+
+        val madeForYou = engine.buildMadeForYou(
+            history = listOf(ListeningEvent("dz_101", "Multo", "Cup of Joe", "OPM", null, 180_000L)),
+            likedSongs = emptyList(),
+            followedArtistIds = setOf("60687062")
+        )
+        assertEquals(3, madeForYou.size)
+        assertEquals("Discover Weekly", madeForYou[0].name)
+        assertEquals("Release Radar", madeForYou[1].name)
+        assertEquals("Daily Mix", madeForYou[2].name)
+        assertTrue(madeForYou.all { it.tracks.isNotEmpty() })
+        assertTrue(madeForYou.flatMap { it.tracks }.none { it.source == TrackSource.AUDIUS })
+
+        val seed = Track(
+            id = "dz_101",
+            title = "Multo",
+            artist = "Cup of Joe",
+            artistId = "60687062",
+            genre = "OPM",
+            streamUrl = "https://cdnt-preview.dzcdn.net/101.mp3",
+            source = TrackSource.DEEZER,
+            isPreviewOnly = true
+        )
+        val picks = engine.getSmartShufflePicks(listOf(seed), excludeIds = setOf("dz_102"), count = 3)
+        assertTrue(picks.isNotEmpty())
+        assertTrue(picks.all { it.isSmartPick && it.id != "dz_101" && it.id != "dz_102" })
+
+        val radio = engine.buildTrackRadio(seed)
+        assertTrue(radio.size >= 2)
+        assertEquals("dz_101", radio.first().id)
+
+        val moodMix = engine.generateAiPlaylist("late night opm")
+        assertTrue(moodMix.tracks.isNotEmpty())
+    }
+
+    @Test
+    fun networkApis_lyricsPodcastAudiobookAndPhRadioParseAndFilterSafely() = runTest {
+        val mockClient = createAuxApisMockClient()
+
+        // LyricsApi fallback from /api/get 404 to /api/search with cleaned title
+        val lyricsApi = LyricsApi(mockClient)
+        val lyrics = lyricsApi.fetchLyrics(
+            Track(
+                id = "dz_101",
+                title = "Multo (Official Audio) [Remix] feat. Guest",
+                artist = "Cup of Joe",
+                durationSec = 238
+            )
+        )
+        assertEquals("dz_101", lyrics.trackKey)
+        assertEquals(2, lyrics.syncedLines.size)
+        assertEquals("Pure light", lyrics.syncedLines.first().text)
+
+        // PodcastApi supports country=PH parameter cleanly
+        val podcastApi = PodcastApi(mockClient)
+        val shows = podcastApi.searchPodcasts("philippines", limit = 10, country = "PH")
+        assertEquals(1, shows.size)
+        assertEquals("Barangay Love Stories", shows.first().title)
+
+        // AudiobookApi prefers 128kb / non-64kb and sorts chapters numerically
+        val audiobookApi = AudiobookApi(mockClient)
+        val chapters = audiobookApi.getChapters(Audiobook(id = "book_1", title = "Test Book", author = "Author"))
+        assertEquals(2, chapters.size)
+        assertEquals("Chapter One", chapters[0].title)
+        assertEquals("https://archive.org/download/book_1/ch01.mp3", chapters[0].streamUrl)
+        assertEquals("Chapter Two", chapters[1].title)
+        assertEquals("https://archive.org/download/book_1/ch02_128kb.mp3", chapters[1].streamUrl)
+        assertEquals(TrackSource.AUDIOBOOK, chapters[0].source)
+
+        // RadioApi.getPhStations queries PH stations and filters out broken / blank / .pls streams
+        val radioApi = RadioApi(mockClient)
+        val phStations = radioApi.getPhStations(20)
+        assertEquals(1, phStations.size)
+        assertTrue(phStations.first().isLive)
+        assertEquals(TrackSource.RADIO, phStations.first().source)
+        assertEquals("96.3 Easy Rock - DWRK", phStations.first().title)
+
+        // HttpClientProvider interceptor verification
+        assertEquals(15_000, HttpClientProvider.client.connectTimeoutMillis)
+        assertEquals(15_000, HttpClientProvider.client.readTimeoutMillis)
+        assertTrue(HttpClientProvider.client.followRedirects)
+        assertTrue(HttpClientProvider.client.followSslRedirects)
+    }
+
+    private fun createCatalogMockClient(): OkHttpClient {
+        val sampleTrack101 = """
+            {
+              "id": 101,
+              "title": "Multo",
+              "duration": 238,
+              "rank": 900000,
+              "link": "https://www.deezer.com/track/101",
+              "preview": "https://cdnt-preview.dzcdn.net/101.mp3",
+              "artist": { "id": 60687062, "name": "Cup of Joe" },
+              "album": {
+                "id": 5001,
+                "title": "Silakbo",
+                "cover_big": "https://cdn.dzcdn.net/cover/101/500x500.jpg",
+                "cover_xl": "https://cdn.dzcdn.net/cover/101/1000x1000.jpg",
+                "release_date": "2024-09-14"
+              }
+            }
+        """.trimIndent()
+
+        val sampleTrack102 = """
+            {
+              "id": 102,
+              "title": "Pantropiko",
+              "duration": 225,
+              "rank": 850000,
+              "link": "https://www.deezer.com/track/102",
+              "preview": "https://cdnt-preview.dzcdn.net/102.mp3",
+              "artist": { "id": 320392011, "name": "BINI" },
+              "album": {
+                "id": 5002,
+                "title": "Pantropiko",
+                "cover_big": "https://cdn.dzcdn.net/cover/102/500x500.jpg",
+                "release_date": "2023-11-17"
+              }
+            }
+        """.trimIndent()
+
+        val sampleTrack103 = """
+            {
+              "id": 103,
+              "title": "sining",
+              "duration": 210,
+              "rank": 800000,
+              "link": "https://www.deezer.com/track/103",
+              "preview": "https://cdnt-preview.dzcdn.net/103.mp3",
+              "artist": { "id": 69165172, "name": "Dionela" },
+              "album": {
+                "id": 5003,
+                "title": "sining",
+                "cover_big": "https://cdn.dzcdn.net/cover/103/500x500.jpg",
+                "release_date": "2024-06-17"
+              }
+            }
+        """.trimIndent()
+
+        val emptyPreviewTrack = """
+            {
+              "id": 999,
+              "title": "Unplayable Song",
+              "duration": 200,
+              "link": "https://www.deezer.com/track/999",
+              "preview": "",
+              "artist": { "id": 1, "name": "Someone" },
+              "album": { "id": 2, "title": "Album" }
+            }
+        """.trimIndent()
+
+        return OkHttpClient.Builder()
             .addInterceptor(Interceptor { chain ->
                 val req = chain.request()
                 val url = req.url.toString()
                 val (code, body) = when {
-                    url.startsWith("https://api.audius.co/v1/tracks/trending") -> 503 to """{"error":"down"}"""
-                    url.startsWith("https://discoveryprovider.audius.co/v1/tracks/trending") -> 200 to """
+                    url.startsWith("https://api.deezer.com/playlist/15507256221/tracks") -> 200 to """
+                        { "data": [ $sampleTrack101, $emptyPreviewTrack, $sampleTrack102 ] }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/playlist/13461654563/tracks") ||
+                        url.startsWith("https://api.deezer.com/playlist/3155776842/tracks") ||
+                        url.startsWith("https://api.deezer.com/chart/0/tracks") -> 200 to """
+                        { "data": [ $sampleTrack101, $sampleTrack102, $sampleTrack103 ] }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/artist/") && url.contains("/top") -> 200 to """
+                        { "data": [ $sampleTrack101, $sampleTrack103 ] }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/artist/") && url.contains("/related") -> 200 to """
                         {
                           "data": [
+                            { "id": 320392011, "name": "BINI", "nb_fan": 25000, "picture_big": "https://cdn.dzcdn.net/bini.jpg" }
+                          ]
+                        }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/artist/") -> 429 to """
+                        { "error": { "type": "Exception", "message": "Quota limit exceeded", "code": 4 } }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/search/track") && url.contains("rate_limited_query") -> 200 to """
+                        { "error": { "type": "Exception", "message": "Quota limit exceeded", "code": 4 } }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/search/track") -> 200 to """
+                        { "data": [ $sampleTrack102, $sampleTrack103 ] }
+                    """.trimIndent()
+
+                    url.startsWith("https://api.deezer.com/search/artist") -> 200 to """
+                        {
+                          "data": [
+                            { "id": 111, "name": "Other Artist", "nb_fan": 500, "picture_big": "https://cdn.dzcdn.net/other.jpg" },
+                            { "id": 320392011, "name": "BINI", "nb_fan": 25000, "picture_big": "https://cdn.dzcdn.net/bini.jpg" }
+                          ]
+                        }
+                    """.trimIndent()
+
+                    url == "https://api.deezer.com/track/101" -> 200 to """
+                        {
+                          "id": 101,
+                          "title": "Multo",
+                          "preview": "https://cdnt-preview.dzcdn.net/fresh/101.mp3"
+                        }
+                    """.trimIndent()
+
+                    url.startsWith("https://rss.marketingtools.apple.com/api/v2/ph/music/most-played") -> 200 to """
+                        {
+                          "feed": {
+                            "results": [
+                              { "name": "Dilaw", "artistName": "Maki" }
+                            ]
+                          }
+                        }
+                    """.trimIndent()
+
+                    url.startsWith("https://itunes.apple.com/search") -> 200 to """
+                        {
+                          "resultCount": 1,
+                          "results": [
                             {
-                              "id": "aud_42",
-                              "title": "Fallback Beat",
-                              "duration": 205,
-                              "genre": "Electronic",
-                              "mood": "Euphoric",
-                              "play_count": 9001,
-                              "artwork": {
-                                "150x150": "https://img/150.jpg",
-                                "1000x1000": "https://img/1000.jpg",
-                                "mirrors": ["https://mirror.audius.co"]
-                              },
-                              "user": { "id": "u_7", "name": "SynthLord", "handle": "synthlord" }
+                              "trackId": 777,
+                              "trackName": "Dilaw",
+                              "artistName": "Maki",
+                              "artistId": 999888,
+                              "collectionName": "Dilaw - Single",
+                              "primaryGenreName": "Pop",
+                              "trackTimeMillis": 212000,
+                              "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/art/100x100bb.jpg",
+                              "previewUrl": "https://audio-ssl.itunes.apple.com/dilaw.m4a",
+                              "trackViewUrl": "https://music.apple.com/ph/album/dilaw"
                             }
                           ]
                         }
                     """.trimIndent()
+
+                    else -> 404 to "{}"
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message(if (code == 200) "OK" else "Error")
+                    .body(body.toResponseBody("application/json".toMediaType()))
+                    .build()
+            })
+            .build()
+    }
+
+    private fun createAuxApisMockClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                val (code, body) = when {
                     url.startsWith("https://lrclib.net/api/get") -> 404 to """{"message":"Not found"}"""
                     url.startsWith("https://lrclib.net/api/search") -> 200 to """
                         [
                           {
                             "id": 1,
-                            "duration": 205,
+                            "duration": 238,
                             "instrumental": false,
                             "plainLyrics": "Pure light\nShining bright",
                             "syncedLyrics": "[00:05.00]Pure light\n[00:10.00]Shining bright"
                           }
                         ]
+                    """.trimIndent()
+                    url.startsWith("https://itunes.apple.com/search") && url.contains("media=podcast") && url.contains("country=PH") -> 200 to """
+                        {
+                          "results": [
+                            {
+                              "collectionId": 55501,
+                              "collectionName": "Barangay Love Stories",
+                              "artistName": "Papa Dudut",
+                              "feedUrl": "https://example.com/bls.rss",
+                              "artworkUrl600": "https://example.com/bls600.jpg",
+                              "primaryGenreName": "Society & Culture"
+                            }
+                          ]
+                        }
                     """.trimIndent()
                     url.startsWith("https://archive.org/metadata/book_1/files") -> 200 to """
                         {
@@ -344,17 +671,36 @@ class DataLayerTest {
                           ]
                         }
                     """.trimIndent()
-                    url.startsWith("https://de1.api.radio-browser.info/json/stations/topclick") -> 200 to """
+                    url.startsWith("https://de1.api.radio-browser.info/json/stations/bycountrycodeexact/PH") -> 200 to """
                         [
                           {
-                            "stationuuid": "rad-1",
-                            "name": "SomaFM Groove Salad",
-                            "url_resolved": "https://ice1.somafm.com/groovesalad-128-mp3",
-                            "favicon": "https://somafm.com/img/groovesalad.png",
-                            "tags": "ambient,chillout",
-                            "country": "United States",
+                            "stationuuid": "ph-ok",
+                            "name": "96.3 Easy Rock - DWRK",
+                            "url_resolved": "https://azura.easyrock.com.ph/listen/easy_rock_manila/radio.mp3",
+                            "favicon": "https://easyrock.com.ph/logo.png",
+                            "tags": "easy listening,pop",
+                            "country": "The Philippines",
                             "bitrate": 128,
-                            "clickcount": 5000
+                            "clickcount": 1200,
+                            "lastcheckok": 1
+                          },
+                          {
+                            "stationuuid": "ph-broken",
+                            "name": "Dead Station",
+                            "url_resolved": "https://dead.example.com/stream",
+                            "lastcheckok": 0
+                          },
+                          {
+                            "stationuuid": "ph-pls",
+                            "name": "PLS Playlist Station",
+                            "url_resolved": "http://example.com/listen.pls",
+                            "lastcheckok": 1
+                          },
+                          {
+                            "stationuuid": "ph-blank",
+                            "name": "Blank URL Station",
+                            "url_resolved": "",
+                            "lastcheckok": 1
                           }
                         ]
                     """.trimIndent()
@@ -369,53 +715,5 @@ class DataLayerTest {
                     .build()
             })
             .build()
-
-        // AudiusApi fallback host + 1000x1000 artwork fallback + mirrors + stream URL
-        val audius = AudiusApi(mockClient)
-        val trending = audius.getTrendingTracks()
-        assertEquals(1, trending.size)
-        val track = trending.first()
-        assertEquals("aud_42", track.id)
-        assertEquals("https://img/1000.jpg", track.artworkUrl)
-        assertEquals(listOf("https://mirror.audius.co"), track.artworkMirrors)
-        assertEquals("https://api.audius.co/v1/tracks/aud_42/stream?app_name=Sonora", track.streamUrl)
-
-        // LyricsApi fallback from /api/get 404 to /api/search with cleaned title
-        val lyricsApi = LyricsApi(mockClient)
-        val lyrics = lyricsApi.fetchLyrics(
-            Track(
-                id = "aud_42",
-                title = "Fallback Beat (Official Audio) [Remix] feat. Guest",
-                artist = "SynthLord",
-                durationSec = 205
-            )
-        )
-        assertEquals("aud_42", lyrics.trackKey)
-        assertEquals(2, lyrics.syncedLines.size)
-        assertEquals("Pure light", lyrics.syncedLines.first().text)
-
-        // AudiobookApi prefers 128kb / non-64kb and sorts chapters numerically
-        val audiobookApi = AudiobookApi(mockClient)
-        val chapters = audiobookApi.getChapters(Audiobook(id = "book_1", title = "Test Book", author = "Author"))
-        assertEquals(2, chapters.size)
-        assertEquals("Chapter One", chapters[0].title)
-        assertEquals("https://archive.org/download/book_1/ch01.mp3", chapters[0].streamUrl)
-        assertEquals("Chapter Two", chapters[1].title)
-        assertEquals("https://archive.org/download/book_1/ch02_128kb.mp3", chapters[1].streamUrl)
-        assertEquals(TrackSource.AUDIOBOOK, chapters[0].source)
-
-        // RadioApi maps live stations
-        val radioApi = RadioApi(mockClient)
-        val stations = radioApi.getTopStations()
-        assertEquals(1, stations.size)
-        assertTrue(stations.first().isLive)
-        assertEquals(TrackSource.RADIO, stations.first().source)
-        assertEquals("SomaFM Groove Salad", stations.first().title)
-
-        // HttpClientProvider interceptor verification
-        assertEquals(15_000, HttpClientProvider.client.connectTimeoutMillis)
-        assertEquals(15_000, HttpClientProvider.client.readTimeoutMillis)
-        assertTrue(HttpClientProvider.client.followRedirects)
-        assertTrue(HttpClientProvider.client.followSslRedirects)
     }
 }

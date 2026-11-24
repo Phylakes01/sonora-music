@@ -18,12 +18,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.GroupAdd
@@ -48,8 +46,7 @@ import com.sonora.music.model.PlaybackState
 import com.sonora.music.model.Track
 import com.sonora.music.ui.components.AnimatedPlayingBars
 import com.sonora.music.ui.components.SonoraArtwork
-import com.sonora.music.ui.theme.CyanGlow
-import com.sonora.music.ui.theme.ObsidianBg
+import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianCard
 import com.sonora.music.ui.theme.ObsidianStroke
 import com.sonora.music.ui.theme.ObsidianSurface
@@ -58,14 +55,13 @@ import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 
 /**
- * Queue & Collaborative Jam sheet displaying Now Playing and Up Next tracks with
- * move up/down, remove, clear up next, ✦ Smart Pick badges, and Jam Queue Share/Import.
+ * Clean matte #181818 Queue & Jam sheet displaying Now Playing and Up Next tracks.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueueSheet(
     playback: PlaybackState,
-    accentColor: Color,
+    @Suppress("UNUSED_PARAMETER") accentColor: Color,
     onPlayTrackInQueue: (Track, List<Track>) -> Unit,
     onMoveItem: (fromIndex: Int, toIndex: Int) -> Unit,
     onRemoveItem: (index: Int) -> Unit,
@@ -93,7 +89,7 @@ fun QueueSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.86f)
-                .padding(horizontal = 18.dp, vertical = 14.dp)
+                .padding(horizontal = 18.dp, vertical = 16.dp)
         ) {
             // Top bar
             Row(
@@ -103,8 +99,8 @@ fun QueueSheet(
             ) {
                 Column {
                     Text(
-                        text = "Queue & Jam",
-                        style = MaterialTheme.typography.headlineSmall,
+                        text = "Queue",
+                        style = MaterialTheme.typography.titleLarge,
                         color = TextPrimary
                     )
                     Text(
@@ -121,8 +117,7 @@ fun QueueSheet(
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(accentColor.copy(alpha = 0.16f))
-                            .border(1.dp, accentColor.copy(alpha = 0.42f), RoundedCornerShape(50))
+                            .background(Color(0xFF2A2A2A))
                             .clickable(onClick = onOpenJamShare)
                             .padding(horizontal = 12.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -131,13 +126,13 @@ fun QueueSheet(
                         Icon(
                             imageVector = Icons.Rounded.GroupAdd,
                             contentDescription = "Jam Queue Share",
-                            tint = accentColor,
+                            tint = TextPrimary,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "Jam Share",
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
-                            color = accentColor
+                            color = TextPrimary
                         )
                     }
 
@@ -156,7 +151,7 @@ fun QueueSheet(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (currentTrack != null) {
                     item(key = "now_playing_header") {
@@ -166,7 +161,7 @@ fun QueueSheet(
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 1.sp
                             ),
-                            color = accentColor
+                            color = TextSecondary
                         )
                     }
 
@@ -174,24 +169,24 @@ fun QueueSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(accentColor.copy(alpha = 0.14f))
-                                .border(1.dp, accentColor.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
-                                .padding(12.dp),
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ObsidianCard)
+                                .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
+                                .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             SonoraArtwork(
                                 artworkUrl = currentTrack.artworkUrl,
                                 title = currentTrack.title,
-                                modifier = Modifier.size(50.dp),
-                                cornerRadius = 12.dp
+                                modifier = Modifier.size(48.dp),
+                                cornerRadius = 4.dp
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = currentTrack.title,
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = TextPrimary,
+                                    color = EmeraldAccent,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -205,7 +200,7 @@ fun QueueSheet(
                             }
                             AnimatedPlayingBars(
                                 isPlaying = playback.isPlaying,
-                                color = accentColor,
+                                color = EmeraldAccent,
                                 modifier = Modifier.size(width = 18.dp, height = 14.dp)
                             )
                         }
@@ -253,14 +248,14 @@ fun QueueSheet(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(ObsidianCard.copy(alpha = 0.6f))
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(18.dp))
-                                .padding(24.dp),
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ObsidianCard)
+                                .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
+                                .padding(22.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Queue is clear. Add tracks, enable Smart Shuffle, or import a Jam Queue code.",
+                                text = "Queue is clear. Add songs or enable Smart Shuffle.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = TextMuted
                             )
@@ -278,65 +273,39 @@ fun QueueSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(ObsidianCard.copy(alpha = 0.72f))
-                                .border(1.dp, ObsidianStroke, RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ObsidianCard)
                                 .clickable { onPlayTrackInQueue(track, playback.queue) }
-                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             SonoraArtwork(
                                 artworkUrl = track.artworkUrl,
                                 title = track.title,
                                 modifier = Modifier.size(44.dp),
-                                cornerRadius = 10.dp
+                                cornerRadius = 4.dp
                             )
 
                             Spacer(modifier = Modifier.width(10.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(
-                                        text = track.title,
-                                        style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp),
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    if (track.isSmartPick) {
-                                        Row(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(CyanGlow.copy(alpha = 0.16f))
-                                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = CyanGlow,
-                                                modifier = Modifier.size(10.dp)
-                                            )
-                                            Text(
-                                                text = "Smart Pick",
-                                                style = MaterialTheme.typography.labelSmall.copy(
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                ),
-                                                color = CyanGlow
-                                            )
-                                        }
-                                    }
-                                }
                                 Text(
-                                    text = "${track.displayArtist} • ${track.formattedDuration}",
+                                    text = track.title,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 14.sp),
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = buildString {
+                                        if (track.isSmartPick) append("Smart Pick · ")
+                                        append(track.displayArtist)
+                                        if (!track.isLive && track.durationSec > 0) {
+                                            append(" · ${track.formattedDuration}")
+                                        }
+                                    },
                                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
-                                    color = TextSecondary,
+                                    color = if (track.isSmartPick) EmeraldAccent else TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )

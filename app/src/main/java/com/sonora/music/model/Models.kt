@@ -2,6 +2,8 @@ package com.sonora.music.model
 
 enum class TrackSource(val badgeLabel: String) {
     AUDIUS("STREAM"),
+    DEEZER("PREVIEW"),
+    ITUNES("PREVIEW"),
     PODCAST("PODCAST"),
     AUDIOBOOK("AUDIOBOOK"),
     RADIO("LIVE"),
@@ -20,15 +22,17 @@ data class Track(
     val artworkUrl: String? = null,
     val artworkMirrors: List<String> = emptyList(),
     val streamUrl: String = "",
-    val source: TrackSource = TrackSource.AUDIUS,
+    val source: TrackSource = TrackSource.DEEZER,
     val isLive: Boolean = false,
     val isSmartPick: Boolean = false,
     val releaseDate: String = "",
     val playCount: Long = 0L,
-    val localUri: String? = null
+    val localUri: String? = null,
+    val externalUrl: String = "",
+    val isPreviewOnly: Boolean = false
 ) {
     val displayArtist: String
-        get() = artist.ifBlank { "Independent Artist" }
+        get() = artist.ifBlank { "Featured Artist" }
 
     val formattedDuration: String
         get() {
@@ -51,8 +55,8 @@ data class Playlist(
     val description: String = "",
     val trackIds: List<String> = emptyList(),
     val tracks: List<Track> = emptyList(),
-    val coverColorStart: Long = 0xFF1ED760L,
-    val coverColorEnd: Long = 0xFF0A2E2AL,
+    val coverColorStart: Long = 0xFF1DB954L,
+    val coverColorEnd: Long = 0xFF181818L,
     val artworkUrl: String? = null,
     val isUserCreated: Boolean = true,
     val isSystemMix: Boolean = false,
@@ -126,9 +130,9 @@ data class WrappedStats(
     val topTracks: List<WrappedTopItem> = emptyList(),
     val topArtists: List<WrappedTopItem> = emptyList(),
     val topGenres: List<WrappedTopItem> = emptyList(),
-    val personaTitle: String = "Sonic Explorer",
-    val personaSubtitle: String = "Always chasing the next great wave across genres.",
-    val auraColors: List<Long> = listOf(0xFF1ED760L, 0xFF00E5FFL, 0xFF7B61FFL)
+    val personaTitle: String = "OPM & Global Listener",
+    val personaSubtitle: String = "Blending local Philippine hits with global charts.",
+    val auraColors: List<Long> = listOf(0xFF1DB954L, 0xFF2E3C48L, 0xFF181818L)
 )
 
 enum class EqPreset(
@@ -155,7 +159,7 @@ data class AudioSettings(
     val crossfadeSeconds: Int = 3,
     val playbackSpeed: Float = 1.0f,
     val privateSession: Boolean = false,
-    val streamingQualityLabel: String = "Lossless / High Stream"
+    val streamingQualityLabel: String = "High Quality"
 )
 
 enum class DownloadStatus {

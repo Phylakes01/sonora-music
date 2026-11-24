@@ -223,12 +223,13 @@ fun SonoraApp(
                         }
                     }
 
-                    // Floating MiniPlayer + BottomNavBar docked cleanly at bottom
+                    // Docked opaque #121212 MiniPlayer + BottomNavBar
                     if (!uiState.isFullPlayerOpen && !uiState.isWrappedOpen) {
                         Column(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
+                                .background(ObsidianBg)
                         ) {
                             AnimatedVisibility(
                                 visible = uiState.playback.currentTrack != null,
@@ -379,7 +380,8 @@ fun SonoraApp(
                             )
                         )
                     },
-                    onShare = { viewModel.shareTrack(track) }
+                    onShare = { viewModel.shareTrack(track) },
+                    onOpenFullTrack = { viewModel.openFullTrackExternal(track) }
                 )
             }
 
@@ -473,12 +475,18 @@ fun SonoraApp(
                 val candidates = remember(
                     uiState.library.likedSongs,
                     uiState.home.quickPicks,
+                    uiState.home.phTopTracks,
+                    uiState.home.opmTracks,
+                    uiState.home.globalTopTracks,
                     uiState.home.trendingTracks,
                     uiState.library.localTracks
                 ) {
                     (
                         uiState.library.likedSongs +
                             uiState.home.quickPicks +
+                            uiState.home.phTopTracks +
+                            uiState.home.opmTracks +
+                            uiState.home.globalTopTracks +
                             uiState.home.trendingTracks +
                             uiState.library.localTracks
                         ).distinctBy { it.id }

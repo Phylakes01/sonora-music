@@ -2,6 +2,7 @@ package com.sonora.music.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,8 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DownloadForOffline
@@ -41,8 +40,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.sonora.music.model.Artist
 import com.sonora.music.model.DetailRoute
 import com.sonora.music.model.DownloadStatus
 import com.sonora.music.model.Playlist
@@ -74,24 +74,20 @@ import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
 import com.sonora.music.ui.components.ShimmerRowPlaceholder
 import com.sonora.music.ui.components.SonoraArtwork
-import com.sonora.music.ui.components.SonoraBadge
 import com.sonora.music.ui.components.TrackRow
 import com.sonora.music.ui.components.formatBytesMb
 import com.sonora.music.ui.components.sonoraPressable
-import com.sonora.music.ui.theme.AmberGold
 import com.sonora.music.ui.theme.CoralHeart
-import com.sonora.music.ui.theme.CyanGlow
 import com.sonora.music.ui.theme.EmeraldAccent
-import com.sonora.music.ui.theme.LocalSonoraAccent
+import com.sonora.music.ui.theme.EmeraldDeep
 import com.sonora.music.ui.theme.ObsidianBg
 import com.sonora.music.ui.theme.ObsidianCard
+import com.sonora.music.ui.theme.ObsidianCardElevated
 import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.ObsidianStrokeSoft
 import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
-import com.sonora.music.ui.theme.VioletPulse
 
 @Composable
 fun DetailScreenHost(
@@ -156,26 +152,24 @@ fun DetailScreenHost(
                 val show = state.detail.podcast ?: route.show
                 val episodes = state.detail.tracks
                 MediaCollectionDetailView(
-                    badgeText = "PODCAST SHOW",
-                    badgeColor = CyanGlow,
+                    contextLabel = "PODCAST",
                     title = show.title,
-                    subtitle = "${show.author} • ${show.genre} • ${episodes.size} episodes",
+                    subtitle = "${show.author} • ${episodes.size} episodes",
                     description = null,
                     artworkUrl = show.artworkUrl,
-                    colorStart = 0xFF00E5FFL,
-                    colorEnd = 0xFF0F2744L,
                     tracks = episodes,
                     isLoading = state.detail.isLoading && episodes.isEmpty(),
-                    emptyText = "No RSS audio episodes found for this show.",
-                    primaryPlayLabel = "Play Latest",
+                    emptyText = "No episodes available for this show.",
                     state = state,
                     actions = actions,
                     onTrackOverflow = onTrackOverflow,
-                    extraSecondaryAction = if (episodes.isNotEmpty()) {
-                        DetailPillAction("Download", Icons.Rounded.DownloadForOffline, EmeraldAccent) {
-                            actions.downloadPlaylist(episodes)
-                        }
-                    } else null
+                    secondaryActions = if (episodes.isNotEmpty()) {
+                        listOf(
+                            DetailActionSpec(Icons.Rounded.DownloadForOffline, "Download") {
+                                actions.downloadPlaylist(episodes)
+                            }
+                        )
+                    } else emptyList()
                 )
             }
 
@@ -183,55 +177,53 @@ fun DetailScreenHost(
                 val book = state.detail.audiobook ?: route.book
                 val chapters = state.detail.tracks
                 MediaCollectionDetailView(
-                    badgeText = "FREE CLASSIC AUDIOBOOK",
-                    badgeColor = AmberGold,
+                    contextLabel = "AUDIOBOOK",
                     title = book.title,
                     subtitle = "${book.author.ifBlank { "LibriVox" }} • ${chapters.size} chapters",
                     description = book.description.takeIf { it.isNotBlank() },
                     artworkUrl = book.artworkUrl,
-                    colorStart = 0xFFFFB74DL,
-                    colorEnd = 0xFF3F230CL,
                     tracks = chapters,
                     isLoading = state.detail.isLoading && chapters.isEmpty(),
-                    emptyText = "No MP3 chapters available for this edition.",
-                    primaryPlayLabel = "Start Book",
+                    emptyText = "No audio chapters found for this title.",
                     state = state,
                     actions = actions,
                     onTrackOverflow = onTrackOverflow,
-                    extraSecondaryAction = if (chapters.isNotEmpty()) {
-                        DetailPillAction("Save Book", Icons.Rounded.DownloadForOffline, EmeraldAccent) {
-                            actions.downloadPlaylist(chapters)
-                        }
-                    } else null
+                    secondaryActions = if (chapters.isNotEmpty()) {
+                        listOf(
+                            DetailActionSpec(Icons.Rounded.DownloadForOffline, "Download") {
+                                actions.downloadPlaylist(chapters)
+                            }
+                        )
+                    } else emptyList()
                 )
             }
 
             is DetailRoute.LikedSongs -> {
                 val tracks = state.library.likedSongs
                 SpecialCollectionDetailView(
-                    badgeText = "FAVORITES",
+                    contextLabel = "PLAYLIST",
                     title = "Liked Songs",
-                    subtitle = "${tracks.size} favorite tracks",
+                    subtitle = "${tracks.size} songs",
                     icon = Icons.Rounded.Favorite,
-                    accentStart = CoralHeart,
-                    accentEnd = Color(0xFF450E24),
+                    headerTint = Color(0xFF4527A0),
+                    coverBrush = Brush.linearGradient(listOf(Color(0xFF4527A0), Color(0xFF281A5E))),
                     tracks = tracks,
-                    emptyTitle = "No Liked Songs yet",
-                    emptySubtitle = "Tap the heart on any song, podcast, or radio station to pin it here.",
+                    emptyTitle = "Songs you like will appear here",
+                    emptySubtitle = "Save songs by tapping the heart icon.",
                     state = state,
                     actions = actions,
                     onTrackOverflow = onTrackOverflow,
                     secondaryActions = listOfNotNull(
                         if (tracks.isNotEmpty()) {
-                            DetailPillAction("Smart Shuffle", Icons.Rounded.AutoAwesome, VioletPulse) {
-                                if (state.playback.shuffleMode != ShuffleMode.SMART_SHUFFLE) {
+                            DetailActionSpec(Icons.Rounded.Shuffle, "Shuffle") {
+                                if (state.playback.shuffleMode == ShuffleMode.OFF) {
                                     actions.toggleShuffle()
                                 }
                                 actions.playTrack(tracks.random(), tracks)
                             }
                         } else null,
                         if (tracks.isNotEmpty()) {
-                            DetailPillAction("Download All", Icons.Rounded.DownloadForOffline, EmeraldAccent) {
+                            DetailActionSpec(Icons.Rounded.DownloadForOffline, "Download") {
                                 actions.downloadPlaylist(tracks)
                             }
                         } else null
@@ -243,21 +235,21 @@ fun DetailScreenHost(
                 val tracks = state.library.downloadedTracks
                 val usedMb = formatBytesMb(state.library.totalDownloadedBytes)
                 SpecialCollectionDetailView(
-                    badgeText = "OFFLINE VAULT",
-                    title = "Offline Downloads",
-                    subtitle = "${tracks.size} tracks • $usedMb used",
+                    contextLabel = "DOWNLOADS",
+                    title = "Downloads",
+                    subtitle = "${tracks.size} tracks • $usedMb",
                     icon = Icons.Rounded.DownloadForOffline,
-                    accentStart = EmeraldAccent,
-                    accentEnd = Color(0xFF0A2E2A),
+                    headerTint = EmeraldDeep,
+                    coverBrush = Brush.linearGradient(listOf(EmeraldDeep, Color(0xFF0E3820))),
                     tracks = tracks,
-                    emptyTitle = "No offline downloads yet",
-                    emptySubtitle = "Download tracks, mixes, or audiobooks to listen smoothly without internet.",
+                    emptyTitle = "No downloads yet",
+                    emptySubtitle = "Downloaded tracks and episodes appear here for offline playback.",
                     state = state,
                     actions = actions,
                     onTrackOverflow = onTrackOverflow,
                     secondaryActions = listOfNotNull(
                         if (tracks.isNotEmpty()) {
-                            DetailPillAction("Clear All", Icons.Rounded.DeleteOutline, CoralHeart) {
+                            DetailActionSpec(Icons.Rounded.DeleteOutline, "Clear All") {
                                 confirmClearDownloads = true
                             }
                         } else null
@@ -268,33 +260,33 @@ fun DetailScreenHost(
             is DetailRoute.LocalFiles -> {
                 val tracks = state.library.localTracks
                 SpecialCollectionDetailView(
-                    badgeText = "DEVICE STORAGE",
-                    title = "Local Audio Files",
-                    subtitle = "${tracks.size} local tracks discovered",
+                    contextLabel = "LOCAL FILES",
+                    title = "Local Audio",
+                    subtitle = "${tracks.size} files on device",
                     icon = Icons.Rounded.LibraryMusic,
-                    accentStart = CyanGlow,
-                    accentEnd = Color(0xFF0F2744),
+                    headerTint = Color(0xFF2D3748),
+                    coverBrush = Brush.linearGradient(listOf(ObsidianCardElevated, ObsidianCard)),
                     tracks = tracks,
                     emptyTitle = if (state.library.hasLocalAudioPermission) {
-                        "No audio files scanned yet"
+                        "No audio files found"
                     } else {
                         "Audio permission required"
                     },
                     emptySubtitle = if (state.library.hasLocalAudioPermission) {
-                        "Tap Scan Device Audio to load MP3, FLAC, WAV, and M4A tracks."
+                        "Tap Scan Device to discover MP3, FLAC, WAV, and M4A files."
                     } else {
-                        "Grant access to your device's audio library to play offline files."
+                        "Allow audio access to browse songs stored on this device."
                     },
                     state = state,
                     actions = actions,
                     onTrackOverflow = onTrackOverflow,
                     secondaryActions = listOf(
                         if (!state.library.hasLocalAudioPermission) {
-                            DetailPillAction("Grant Access", Icons.Rounded.FolderOpen, CyanGlow) {
+                            DetailActionSpec(Icons.Rounded.FolderOpen, "Grant Access") {
                                 actions.requestLocalAudioPermission()
                             }
                         } else {
-                            DetailPillAction("Scan Device", Icons.Rounded.Refresh, CyanGlow) {
+                            DetailActionSpec(Icons.Rounded.Refresh, "Scan Device") {
                                 actions.scanLocalFiles()
                             }
                         }
@@ -322,7 +314,7 @@ fun DetailScreenHost(
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
             title = { Text("Delete \"${target.name}\"?") },
-            text = { Text("This removes the playlist from your library. Downloaded songs stay in Offline Vault.") },
+            text = { Text("This removes the playlist from your library.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -348,8 +340,8 @@ fun DetailScreenHost(
             containerColor = ObsidianSurface,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
-            title = { Text("Clear all offline downloads?") },
-            text = { Text("Frees ${formatBytesMb(state.library.totalDownloadedBytes)} of storage from your device.") },
+            title = { Text("Remove all downloads?") },
+            text = { Text("Frees ${formatBytesMb(state.library.totalDownloadedBytes)} of storage.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -357,7 +349,7 @@ fun DetailScreenHost(
                         confirmClearDownloads = false
                     }
                 ) {
-                    Text("Clear All", color = CoralHeart, fontWeight = FontWeight.Bold)
+                    Text("Remove", color = CoralHeart, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -369,48 +361,69 @@ fun DetailScreenHost(
     }
 }
 
-private data class DetailPillAction(
-    val label: String,
+private data class DetailActionSpec(
     val icon: ImageVector,
-    val tint: Color,
+    val label: String,
+    val isActive: Boolean = false,
     val onClick: () -> Unit
 )
 
 @Composable
 private fun DetailTopBar(
     onBack: () -> Unit,
-    badgeText: String,
-    badgeColor: Color,
+    contextLabel: String,
     trailingActions: @Composable () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(
-                shape = CircleShape,
-                color = ObsidianCard.copy(alpha = 0.85f),
-                border = BorderStroke(1.dp, ObsidianStrokeSoft),
-                modifier = Modifier.sonoraPressable(shape = CircleShape, onClick = onBack)
-            ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "Back",
-                    tint = TextPrimary,
-                    modifier = Modifier
-                        .padding(9.dp)
-                        .size(20.dp)
+                    tint = TextPrimary
                 )
             }
-            SonoraBadge(text = badgeText, tint = badgeColor)
+            Text(
+                text = contextLabel,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    letterSpacing = 1.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = TextSecondary
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             trailingActions()
+        }
+    }
+}
+
+@Composable
+private fun DetailPrimaryPlayButton(
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = if (enabled) EmeraldAccent else ObsidianCard,
+        modifier = Modifier
+            .size(52.dp)
+            .sonoraPressable(enabled = enabled, shape = CircleShape, onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Rounded.PlayArrow,
+                contentDescription = "Play",
+                tint = if (enabled) Color.Black else TextMuted,
+                modifier = Modifier.size(28.dp)
+            )
         }
     }
 }
@@ -428,20 +441,17 @@ private fun PlaylistDetailView(
     onShareCode: () -> Unit,
     onDeleteRequest: () -> Unit
 ) {
-    val startColor = Color(playlist.coverColorStart)
-    val endColor = Color(playlist.coverColorEnd)
-    val accent = LocalSonoraAccent.current
+    val washColor = Color(playlist.coverColorStart)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(340.dp)
+                .height(260.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            startColor.copy(alpha = 0.34f),
-                            endColor.copy(alpha = 0.40f),
+                            washColor.copy(alpha = 0.22f),
                             ObsidianBg
                         )
                     )
@@ -450,19 +460,18 @@ private fun PlaylistDetailView(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 164.dp)
+            contentPadding = PaddingValues(bottom = 148.dp)
         ) {
             item(key = "pl_top_bar") {
                 DetailTopBar(
                     onBack = { actions.closeDetail() },
-                    badgeText = if (playlist.isSystemMix) "MADE FOR YOU" else "PLAYLIST",
-                    badgeColor = startColor,
+                    contextLabel = "PLAYLIST",
                     trailingActions = {
                         if (playlist.isUserCreated) {
                             IconButton(onClick = onRename) {
                                 Icon(
                                     imageVector = Icons.Rounded.Edit,
-                                    contentDescription = "Rename playlist",
+                                    contentDescription = "Edit playlist",
                                     tint = TextPrimary
                                 )
                             }
@@ -470,7 +479,7 @@ private fun PlaylistDetailView(
                                 Icon(
                                     imageVector = Icons.Rounded.DeleteOutline,
                                     contentDescription = "Delete playlist",
-                                    tint = CoralHeart
+                                    tint = TextSecondary
                                 )
                             }
                         } else {
@@ -485,8 +494,8 @@ private fun PlaylistDetailView(
                         IconButton(onClick = onShareCode) {
                             Icon(
                                 imageVector = Icons.Rounded.QrCode2,
-                                contentDescription = "Share / Collab Code",
-                                tint = CyanGlow
+                                contentDescription = "Share Code",
+                                tint = TextPrimary
                             )
                         }
                     }
@@ -497,23 +506,26 @@ private fun PlaylistDetailView(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    SonoraArtwork(
-                        artworkUrl = playlist.artworkUrl ?: tracks.firstOrNull()?.artworkUrl,
-                        title = playlist.name,
-                        cornerRadius = 22.dp,
-                        colorStart = playlist.coverColorStart,
-                        colorEnd = playlist.coverColorEnd,
-                        modifier = Modifier.size(184.dp)
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SonoraArtwork(
+                            artworkUrl = playlist.artworkUrl ?: tracks.firstOrNull()?.artworkUrl,
+                            title = playlist.name,
+                            cornerRadius = 8.dp,
+                            colorStart = playlist.coverColorStart,
+                            colorEnd = playlist.coverColorEnd,
+                            modifier = Modifier.size(180.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = playlist.name,
                         style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary,
-                        textAlign = TextAlign.Center
+                        color = TextPrimary
                     )
                     if (playlist.description.isNotBlank()) {
                         Spacer(modifier = Modifier.height(4.dp))
@@ -521,97 +533,83 @@ private fun PlaylistDetailView(
                             text = playlist.description,
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary,
-                            textAlign = TextAlign.Center,
-                            maxLines = 3,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "${playlist.authorName} • ${tracks.size} tracks",
                         style = MaterialTheme.typography.labelLarge,
-                        color = TextMuted
+                        color = TextSecondary
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    // Primary Action Bar
+                    // Action Bar: Secondary icons left + Spotify Green Play circle right
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
-                            onClick = {
-                                if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = ObsidianBg
-                            ),
-                            modifier = Modifier.weight(1f)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Play All", fontWeight = FontWeight.Bold)
+                            if (tracks.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { actions.downloadPlaylist(tracks) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DownloadForOffline,
+                                        contentDescription = "Download all",
+                                        tint = TextSecondary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (state.playback.shuffleMode == ShuffleMode.OFF) {
+                                            actions.toggleShuffle()
+                                        }
+                                        actions.playTrack(tracks.random(), tracks)
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Shuffle,
+                                        contentDescription = "Shuffle play",
+                                        tint = if (state.playback.shuffleMode != ShuffleMode.OFF) EmeraldAccent else TextSecondary
+                                    )
+                                }
+                            }
+                            if (playlist.isUserCreated) {
+                                OutlinedButton(
+                                    onClick = onAddTrack,
+                                    shape = CircleShape,
+                                    border = BorderStroke(1.dp, ObsidianStroke),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Add,
+                                        contentDescription = null,
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Add", color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                if (state.playback.shuffleMode != ShuffleMode.SMART_SHUFFLE) {
-                                    actions.toggleShuffle()
-                                }
-                                if (tracks.isNotEmpty()) {
-                                    actions.playTrack(tracks.random(), tracks)
-                                }
-                            },
+                        DetailPrimaryPlayButton(
                             enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, VioletPulse.copy(alpha = 0.65f)),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = VioletPulse,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Smart Mix", color = TextPrimary, maxLines = 1)
-                        }
+                            onClick = {
+                                if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
+                            }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (tracks.isNotEmpty()) {
-                            DetailActionPill(
-                                action = DetailPillAction("Download All", Icons.Rounded.DownloadForOffline, EmeraldAccent) {
-                                    actions.downloadPlaylist(tracks)
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (playlist.isUserCreated) {
-                            DetailActionPill(
-                                action = DetailPillAction("Add Tracks", Icons.Rounded.Add, accent) {
-                                    onAddTrack()
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        DetailActionPill(
-                            action = DetailPillAction("Collab Code", Icons.Rounded.QrCode2, CyanGlow) {
-                                onShareCode()
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                    HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
                 }
             }
 
@@ -620,85 +618,83 @@ private fun PlaylistDetailView(
             } else if (tracks.isEmpty()) {
                 item(key = "pl_empty") {
                     DetailEmptyCard(
-                        title = "Playlist is empty",
+                        title = "No songs in this playlist yet",
                         subtitle = if (playlist.isUserCreated) {
-                            "Tap Add Tracks above or use the 3-dot menu on any song to build this mix."
+                            "Tap Add above or use the menu on any song."
                         } else {
-                            "No tracks returned for this playlist right now."
+                            "No tracks available right now."
                         },
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
                     )
                 }
             } else {
                 itemsIndexed(tracks, key = { idx, track -> "pl_tr_${idx}_${track.id}" }) { idx, track ->
                     val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            index = idx + 1,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, tracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
-                                }
-                            },
-                            onMoreClick = { onTrackOverflow(track) },
-                            trailingContent = if (playlist.isUserCreated) {
-                                {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(
-                                            onClick = {
-                                                if (idx > 0) actions.reorderPlaylistTrack(playlist.id, idx, idx - 1)
-                                            },
-                                            enabled = idx > 0,
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.KeyboardArrowUp,
-                                                contentDescription = "Move up",
-                                                tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.35f),
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                if (idx < tracks.lastIndex) {
-                                                    actions.reorderPlaylistTrack(playlist.id, idx, idx + 1)
-                                                }
-                                            },
-                                            enabled = idx < tracks.lastIndex,
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.KeyboardArrowDown,
-                                                contentDescription = "Move down",
-                                                tint = if (idx < tracks.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.35f),
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { actions.removeTrackFromPlaylist(playlist.id, track.id) },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Close,
-                                                contentDescription = "Remove from playlist",
-                                                tint = CoralHeart.copy(alpha = 0.85f),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
+                    TrackRow(
+                        track = track,
+                        index = idx + 1,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, tracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) },
+                        trailingContent = if (playlist.isUserCreated) {
+                            {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            if (idx > 0) actions.reorderPlaylistTrack(playlist.id, idx, idx - 1)
+                                        },
+                                        enabled = idx > 0,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.KeyboardArrowUp,
+                                            contentDescription = "Move up",
+                                            tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.35f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (idx < tracks.lastIndex) {
+                                                actions.reorderPlaylistTrack(playlist.id, idx, idx + 1)
+                                            }
+                                        },
+                                        enabled = idx < tracks.lastIndex,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                                            contentDescription = "Move down",
+                                            tint = if (idx < tracks.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.35f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { actions.removeTrackFromPlaylist(playlist.id, track.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "Remove",
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
                                     }
                                 }
-                            } else null
-                        )
-                    }
+                            }
+                        } else null
+                    )
                 }
             }
         }
@@ -707,7 +703,7 @@ private fun PlaylistDetailView(
 
 @Composable
 private fun ArtistDetailView(
-    artist: com.sonora.music.model.Artist,
+    artist: Artist,
     tracks: List<Track>,
     isFollowing: Boolean,
     isLoading: Boolean,
@@ -715,16 +711,15 @@ private fun ArtistDetailView(
     actions: SonoraActions,
     onTrackOverflow: (Track) -> Unit
 ) {
-    val accent = LocalSonoraAccent.current
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(330.dp)
+                .height(240.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            VioletPulse.copy(alpha = 0.35f),
+                            Color(0xFF2B2B2B),
                             ObsidianBg
                         )
                     )
@@ -733,13 +728,12 @@ private fun ArtistDetailView(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 164.dp)
+            contentPadding = PaddingValues(bottom = 148.dp)
         ) {
             item(key = "artist_top_bar") {
                 DetailTopBar(
                     onBack = { actions.closeDetail() },
-                    badgeText = "ARTIST",
-                    badgeColor = VioletPulse
+                    contextLabel = "ARTIST"
                 )
             }
 
@@ -747,104 +741,88 @@ private fun ArtistDetailView(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    SonoraArtwork(
-                        artworkUrl = artist.avatarUrl,
-                        title = artist.name,
-                        isCircle = true,
-                        colorStart = 0xFF8C6EFFL,
-                        colorEnd = 0xFF1B1540L,
-                        modifier = Modifier.size(144.dp)
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SonoraArtwork(
+                            artworkUrl = artist.avatarUrl,
+                            title = artist.name,
+                            isCircle = true,
+                            modifier = Modifier.size(144.dp)
+                        )
+                    }
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = artist.name,
                         style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary,
-                        textAlign = TextAlign.Center
+                        color = TextPrimary
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = buildString {
-                            if (artist.handle.isNotBlank()) append("@${artist.handle} • ")
-                            append("${artist.followerCount} followers")
-                            if (artist.trackCount > 0) append(" • ${artist.trackCount} tracks")
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                    if (artist.bio.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                    if (artist.followerCount > 0 || artist.trackCount > 0) {
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = artist.bio,
+                            text = buildString {
+                                if (artist.followerCount > 0) {
+                                    append("${formatArtistCount(artist.followerCount)} fans")
+                                }
+                                if (artist.trackCount > 0) {
+                                    if (isNotEmpty()) append(" • ")
+                                    append("${artist.trackCount} tracks")
+                                }
+                            },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center
+                            color = TextSecondary
                         )
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { actions.toggleFollowArtist(artist) },
+                                shape = CircleShape,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isFollowing) EmeraldAccent else ObsidianStroke
+                                ),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (isFollowing) "Following" else "Follow",
+                                    color = if (isFollowing) EmeraldAccent else TextPrimary,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+
+                            IconButton(onClick = { actions.startArtistRadio(artist) }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Radio,
+                                    contentDescription = "Artist Radio",
+                                    tint = TextSecondary
+                                )
+                            }
+                        }
+
+                        DetailPrimaryPlayButton(
+                            enabled = tracks.isNotEmpty(),
                             onClick = {
                                 if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = ObsidianBg
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Play", fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = { actions.toggleFollowArtist(artist) },
-                            shape = CircleShape,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isFollowing) EmeraldAccent else ObsidianStroke
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            if (isFollowing) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = null,
-                                    tint = EmeraldAccent,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
                             }
-                            Text(
-                                text = if (isFollowing) "Following" else "Follow",
-                                color = if (isFollowing) EmeraldAccent else TextPrimary
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = { actions.startArtistRadio(artist) },
-                            shape = CircleShape,
-                            border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.65f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Radio,
-                                contentDescription = "Artist Radio",
-                                tint = CyanGlow,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                        )
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
                 }
             }
 
@@ -853,34 +831,40 @@ private fun ArtistDetailView(
             } else if (tracks.isEmpty()) {
                 item(key = "artist_empty") {
                     DetailEmptyCard(
-                        title = "No tracks loaded yet",
-                        subtitle = "Try starting Artist Radio to hear related waves.",
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                        title = "No songs loaded",
+                        subtitle = "Try starting Artist Radio.",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
                     )
                 }
             } else {
+                item(key = "artist_popular_title") {
+                    Text(
+                        text = "Popular",
+                        style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp),
+                        color = TextPrimary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
                 itemsIndexed(tracks, key = { idx, track -> "art_tr_${idx}_${track.id}" }) { idx, track ->
                     val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            index = idx + 1,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, tracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
-                                }
-                            },
-                            onMoreClick = { onTrackOverflow(track) }
-                        )
-                    }
+                    TrackRow(
+                        track = track,
+                        index = idx + 1,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, tracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) }
+                    )
                 }
             }
         }
@@ -889,34 +873,28 @@ private fun ArtistDetailView(
 
 @Composable
 private fun MediaCollectionDetailView(
-    badgeText: String,
-    badgeColor: Color,
+    contextLabel: String,
     title: String,
     subtitle: String,
     description: String?,
     artworkUrl: String?,
-    colorStart: Long,
-    colorEnd: Long,
     tracks: List<Track>,
     isLoading: Boolean,
     emptyText: String,
-    primaryPlayLabel: String,
     state: SonoraUiState,
     actions: SonoraActions,
     onTrackOverflow: (Track) -> Unit,
-    extraSecondaryAction: DetailPillAction?
+    secondaryActions: List<DetailActionSpec>
 ) {
-    val accent = LocalSonoraAccent.current
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(330.dp)
+                .height(250.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            Color(colorStart).copy(alpha = 0.28f),
-                            Color(colorEnd).copy(alpha = 0.42f),
+                            Color(0xFF282828),
                             ObsidianBg
                         )
                     )
@@ -925,13 +903,12 @@ private fun MediaCollectionDetailView(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 164.dp)
+            contentPadding = PaddingValues(bottom = 148.dp)
         ) {
             item(key = "media_top_bar") {
                 DetailTopBar(
                     onBack = { actions.closeDetail() },
-                    badgeText = badgeText,
-                    badgeColor = badgeColor
+                    contextLabel = contextLabel
                 )
             }
 
@@ -939,179 +916,20 @@ private fun MediaCollectionDetailView(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    SonoraArtwork(
-                        artworkUrl = artworkUrl,
-                        title = title,
-                        cornerRadius = 20.dp,
-                        colorStart = colorStart,
-                        colorEnd = colorEnd,
-                        modifier = Modifier.size(168.dp)
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                    if (!description.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = description,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        SonoraArtwork(
+                            artworkUrl = artworkUrl,
+                            title = title,
+                            cornerRadius = 8.dp,
+                            modifier = Modifier.size(168.dp)
                         )
                     }
                     Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = ObsidianBg
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(primaryPlayLabel, fontWeight = FontWeight.Bold)
-                        }
-                        if (extraSecondaryAction != null) {
-                            DetailActionPill(
-                                action = extraSecondaryAction,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (isLoading) {
-                items(6) { ShimmerRowPlaceholder() }
-            } else if (tracks.isEmpty()) {
-                item(key = "media_empty") {
-                    DetailEmptyCard(
-                        title = "Nothing available",
-                        subtitle = emptyText,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
-                    )
-                }
-            } else {
-                itemsIndexed(tracks, key = { idx, track -> "med_tr_${idx}_${track.id}" }) { idx, track ->
-                    val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            index = idx + 1,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, tracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
-                                }
-                            },
-                            onMoreClick = { onTrackOverflow(track) }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SpecialCollectionDetailView(
-    badgeText: String,
-    title: String,
-    subtitle: String,
-    icon: ImageVector,
-    accentStart: Color,
-    accentEnd: Color,
-    tracks: List<Track>,
-    emptyTitle: String,
-    emptySubtitle: String,
-    state: SonoraUiState,
-    actions: SonoraActions,
-    onTrackOverflow: (Track) -> Unit,
-    secondaryActions: List<DetailPillAction>
-) {
-    val accent = LocalSonoraAccent.current
-    Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(310.dp)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            accentStart.copy(alpha = 0.28f),
-                            accentEnd.copy(alpha = 0.42f),
-                            ObsidianBg
-                        )
-                    )
-                )
-        )
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 164.dp)
-        ) {
-            item(key = "spec_top_bar") {
-                DetailTopBar(
-                    onBack = { actions.closeDetail() },
-                    badgeText = badgeText,
-                    badgeColor = accentStart
-                )
-            }
-
-            item(key = "spec_hero") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(136.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(Brush.linearGradient(listOf(accentStart, accentEnd))),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(62.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(14.dp))
                     Text(
                         text = title,
                         style = MaterialTheme.typography.headlineMedium,
@@ -1123,32 +941,208 @@ private fun SpecialCollectionDetailView(
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
+                    if (!description.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextMuted,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            secondaryActions.forEach { spec ->
+                                OutlinedButton(
+                                    onClick = spec.onClick,
+                                    shape = CircleShape,
+                                    border = BorderStroke(1.dp, ObsidianStroke),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = spec.icon,
+                                        contentDescription = null,
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(spec.label, color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+
+                        DetailPrimaryPlayButton(
+                            enabled = tracks.isNotEmpty(),
+                            onClick = {
+                                if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
+                }
+            }
+
+            if (isLoading) {
+                items(6) { ShimmerRowPlaceholder() }
+            } else if (tracks.isEmpty()) {
+                item(key = "media_empty") {
+                    DetailEmptyCard(
+                        title = "Nothing available",
+                        subtitle = emptyText,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+                    )
+                }
+            } else {
+                itemsIndexed(tracks, key = { idx, track -> "med_tr_${idx}_${track.id}" }) { idx, track ->
+                    val isCurrent = state.playback.currentTrack?.id == track.id
+                    TrackRow(
+                        track = track,
+                        index = idx + 1,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, tracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpecialCollectionDetailView(
+    contextLabel: String,
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    headerTint: Color,
+    coverBrush: Brush,
+    tracks: List<Track>,
+    emptyTitle: String,
+    emptySubtitle: String,
+    state: SonoraUiState,
+    actions: SonoraActions,
+    onTrackOverflow: (Track) -> Unit,
+    secondaryActions: List<DetailActionSpec>
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            headerTint.copy(alpha = 0.25f),
+                            ObsidianBg
+                        )
+                    )
+                )
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 148.dp)
+        ) {
+            item(key = "spec_top_bar") {
+                DetailTopBar(
+                    onBack = { actions.closeDetail() },
+                    contextLabel = contextLabel
+                )
+            }
+
+            item(key = "spec_hero") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(136.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(coverBrush),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(56.dp)
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            secondaryActions.forEach { spec ->
+                                OutlinedButton(
+                                    onClick = spec.onClick,
+                                    shape = CircleShape,
+                                    border = BorderStroke(1.dp, ObsidianStroke),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = spec.icon,
+                                        contentDescription = null,
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(spec.label, color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+
+                        DetailPrimaryPlayButton(
+                            enabled = tracks.isNotEmpty(),
                             onClick = {
                                 if (tracks.isNotEmpty()) actions.playTrack(tracks.first(), tracks)
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = ObsidianBg
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Play All", fontWeight = FontWeight.Bold)
-                        }
-                        secondaryActions.forEach { action ->
-                            DetailActionPill(action = action, modifier = Modifier.weight(1f))
-                        }
+                            }
+                        )
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
                 }
             }
 
@@ -1157,32 +1151,30 @@ private fun SpecialCollectionDetailView(
                     DetailEmptyCard(
                         title = emptyTitle,
                         subtitle = emptySubtitle,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
                     )
                 }
             } else {
                 itemsIndexed(tracks, key = { idx, track -> "spec_tr_${idx}_${track.id}" }) { idx, track ->
                     val isCurrent = state.playback.currentTrack?.id == track.id
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            index = idx + 1,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, tracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
-                                }
-                            },
-                            onMoreClick = { onTrackOverflow(track) }
-                        )
-                    }
+                    TrackRow(
+                        track = track,
+                        index = idx + 1,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, tracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) }
+                    )
                 }
             }
         }
@@ -1198,51 +1190,34 @@ private fun JamQueueDetailView(
 ) {
     val tracks = state.playback.queue
     val currentIndex = state.playback.currentIndex
-    val accent = LocalSonoraAccent.current
 
     val jamPlaylist = remember(tracks) {
         Playlist(
             id = "jam_queue",
             name = "Sonora Jam Queue",
-            description = "Live collaborative queue (${tracks.size} tracks)",
+            description = "${tracks.size} tracks",
             tracks = tracks,
-            coverColorStart = 0xFF8C6EFFL,
-            coverColorEnd = 0xFF1B1540L,
+            coverColorStart = 0xFF1DB954L,
+            coverColorEnd = 0xFF181818L,
             isUserCreated = false
         )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(310.dp)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            VioletPulse.copy(alpha = 0.34f),
-                            CyanGlow.copy(alpha = 0.16f),
-                            ObsidianBg
-                        )
-                    )
-                )
-        )
-
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 164.dp)
+            contentPadding = PaddingValues(bottom = 148.dp)
         ) {
             item(key = "jam_top_bar") {
                 DetailTopBar(
                     onBack = { actions.closeDetail() },
-                    badgeText = "LIVE JAM",
-                    badgeColor = VioletPulse,
+                    contextLabel = "QUEUE",
                     trailingActions = {
                         IconButton(onClick = { onShareJamCode(jamPlaylist) }) {
                             Icon(
                                 imageVector = Icons.Rounded.QrCode2,
-                                contentDescription = "Share or Merge Jam Code",
-                                tint = CyanGlow
+                                contentDescription = "Share or Merge Queue",
+                                tint = TextPrimary
                             )
                         }
                     }
@@ -1253,199 +1228,158 @@ private fun JamQueueDetailView(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(132.dp)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(Brush.linearGradient(listOf(VioletPulse, CyanGlow))),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Groups,
-                            contentDescription = null,
-                            tint = ObsidianBg,
-                            modifier = Modifier.size(60.dp)
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(ObsidianCard),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Groups,
+                                contentDescription = null,
+                                tint = TextPrimary,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Jam Queue",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "${tracks.size} tracks queued",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
                     }
+
                     Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Jam & Party Queue",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "${tracks.size} tracks queued • Share or merge codes with friends",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { onShareJamCode(jamPlaylist) },
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, ObsidianStroke),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.QrCode2,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Share / Merge", color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+                            }
+                            if (tracks.size > 1) {
+                                IconButton(onClick = { actions.clearQueue() }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Clear Up Next",
+                                        tint = TextSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        DetailPrimaryPlayButton(
+                            enabled = tracks.isNotEmpty(),
                             onClick = {
                                 if (tracks.isNotEmpty()) {
                                     val target = tracks.getOrNull(currentIndex) ?: tracks.first()
                                     actions.playTrack(target, tracks)
                                 }
-                            },
-                            enabled = tracks.isNotEmpty(),
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = accent,
-                                contentColor = ObsidianBg
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Play Queue", fontWeight = FontWeight.Bold)
-                        }
-
-                        DetailActionPill(
-                            action = DetailPillAction("Share / Merge", Icons.Rounded.QrCode2, CyanGlow) {
-                                onShareJamCode(jamPlaylist)
-                            },
-                            modifier = Modifier.weight(1f)
+                            }
                         )
                     }
 
-                    if (tracks.size > 1) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            DetailActionPill(
-                                action = DetailPillAction("Shuffle", Icons.Rounded.Shuffle, VioletPulse) {
-                                    actions.toggleShuffle()
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            DetailActionPill(
-                                action = DetailPillAction("Clear Up Next", Icons.Rounded.DeleteOutline, CoralHeart) {
-                                    actions.clearQueue()
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
                 }
             }
 
             if (tracks.isEmpty()) {
                 item(key = "jam_empty") {
                     DetailEmptyCard(
-                        title = "Jam Queue is empty",
-                        subtitle = "Play any song or tap Share / Merge above to import a friend's playlist code straight into the queue.",
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+                        title = "Queue is empty",
+                        subtitle = "Play any song or merge a playlist code.",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
                     )
                 }
             } else {
                 itemsIndexed(tracks, key = { idx, track -> "jam_${idx}_${track.id}" }) { idx, track ->
                     val isCurrent = idx == currentIndex
-                    Box(modifier = Modifier.padding(horizontal = 10.dp)) {
-                        TrackRow(
-                            track = track,
-                            index = idx + 1,
-                            isCurrent = isCurrent,
-                            isPlaying = isCurrent && state.playback.isPlaying,
-                            isLiked = track.id in state.likedTrackIds,
-                            downloadState = state.downloads[track.id],
-                            onClick = { actions.playTrack(track, tracks) },
-                            onLikeClick = { actions.toggleLike(track) },
-                            onDownloadClick = {
-                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
-                                    actions.deleteDownload(track.id)
-                                } else {
-                                    actions.downloadTrack(track)
+                    TrackRow(
+                        track = track,
+                        index = idx + 1,
+                        isCurrent = isCurrent,
+                        isPlaying = isCurrent && state.playback.isPlaying,
+                        isLiked = track.id in state.likedTrackIds,
+                        downloadState = state.downloads[track.id],
+                        onClick = { actions.playTrack(track, tracks) },
+                        onLikeClick = { actions.toggleLike(track) },
+                        onDownloadClick = {
+                            if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                actions.deleteDownload(track.id)
+                            } else {
+                                actions.downloadTrack(track)
+                            }
+                        },
+                        onMoreClick = { onTrackOverflow(track) },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { if (idx > 0) actions.moveQueueItem(idx, idx - 1) },
+                                    enabled = idx > 0,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.KeyboardArrowUp,
+                                        contentDescription = "Move up",
+                                        tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.35f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
-                            },
-                            onMoreClick = { onTrackOverflow(track) },
-                            trailingContent = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(
-                                        onClick = { if (idx > 0) actions.moveQueueItem(idx, idx - 1) },
-                                        enabled = idx > 0,
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.KeyboardArrowUp,
-                                            contentDescription = "Move up",
-                                            tint = if (idx > 0) TextSecondary else TextMuted.copy(alpha = 0.35f),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { if (idx < tracks.lastIndex) actions.moveQueueItem(idx, idx + 1) },
-                                        enabled = idx < tracks.lastIndex,
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.KeyboardArrowDown,
-                                            contentDescription = "Move down",
-                                            tint = if (idx < tracks.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.35f),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = { actions.removeQueueItem(idx) },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Close,
-                                            contentDescription = "Remove from queue",
-                                            tint = CoralHeart.copy(alpha = 0.85f),
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
+                                IconButton(
+                                    onClick = { if (idx < tracks.lastIndex) actions.moveQueueItem(idx, idx + 1) },
+                                    enabled = idx < tracks.lastIndex,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                                        contentDescription = "Move down",
+                                        tint = if (idx < tracks.lastIndex) TextSecondary else TextMuted.copy(alpha = 0.35f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { actions.removeQueueItem(idx) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Remove",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
                             }
-                        )
-                    }
+                        }
+                    )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun DetailActionPill(
-    action: DetailPillAction,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        shape = CircleShape,
-        color = ObsidianCard,
-        border = BorderStroke(1.dp, action.tint.copy(alpha = 0.50f)),
-        modifier = modifier.sonoraPressable(shape = CircleShape, onClick = action.onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = action.icon,
-                contentDescription = null,
-                tint = action.tint,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = action.label,
-                style = MaterialTheme.typography.labelLarge,
-                color = TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -1457,9 +1391,9 @@ private fun DetailEmptyCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = ObsidianCard,
-        border = BorderStroke(1.dp, ObsidianStrokeSoft),
+        shape = RoundedCornerShape(8.dp),
+        color = ObsidianSurface,
+        border = BorderStroke(1.dp, ObsidianStroke),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
@@ -1482,5 +1416,13 @@ private fun DetailEmptyCard(
                 textAlign = TextAlign.Center
             )
         }
+    }
+}
+
+private fun formatArtistCount(count: Long): String {
+    return when {
+        count >= 1_000_000L -> "%.1fM".format(count / 1_000_000.0)
+        count >= 1_000L -> "%.1fK".format(count / 1_000.0)
+        else -> count.toString()
     }
 }

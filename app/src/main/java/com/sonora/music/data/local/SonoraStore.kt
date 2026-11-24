@@ -188,7 +188,7 @@ class SonoraStore(private val rootDir: File) {
                 playbackSpeed = obj.optDouble("playbackSpeed", 1.0).toFloat(),
                 privateSession = obj.optBoolean("privateSession", false),
                 streamingQualityLabel = obj.optClean("streamingQualityLabel")
-                    .ifBlank { "Lossless / High Stream" }
+                    .ifBlank { "High Quality" }
             )
         } catch (_: Throwable) {
             AudioSettings()
@@ -372,6 +372,8 @@ class SonoraStore(private val rootDir: File) {
         put("releaseDate", track.releaseDate)
         put("playCount", track.playCount)
         put("localUri", track.localUri ?: JSONObject.NULL)
+        put("externalUrl", track.externalUrl)
+        put("isPreviewOnly", track.isPreviewOnly)
     }
 
     private fun trackFromJson(obj: JSONObject): Track? {
@@ -379,7 +381,7 @@ class SonoraStore(private val rootDir: File) {
         val title = obj.optClean("title")
         if (id.isEmpty() || title.isEmpty()) return null
         val sourceName = obj.optClean("source")
-        val source = TrackSource.entries.firstOrNull { it.name == sourceName } ?: TrackSource.AUDIUS
+        val source = TrackSource.entries.firstOrNull { it.name == sourceName } ?: TrackSource.DEEZER
 
         return Track(
             id = id,
@@ -398,7 +400,9 @@ class SonoraStore(private val rootDir: File) {
             isSmartPick = obj.optBoolean("isSmartPick", false),
             releaseDate = obj.optClean("releaseDate"),
             playCount = obj.optLong("playCount", 0L).coerceAtLeast(0L),
-            localUri = obj.optClean("localUri").ifBlank { null }
+            localUri = obj.optClean("localUri").ifBlank { null },
+            externalUrl = obj.optClean("externalUrl"),
+            isPreviewOnly = obj.optBoolean("isPreviewOnly", false)
         )
     }
 

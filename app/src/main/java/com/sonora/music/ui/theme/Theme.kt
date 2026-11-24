@@ -12,43 +12,44 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-val ObsidianBg = Color(0xFF080A0F)
-val ObsidianSurface = Color(0xFF10141D)
-val ObsidianCard = Color(0xFF171D2A)
-val ObsidianCardElevated = Color(0xFF1E2636)
-val ObsidianStroke = Color(0x26FFFFFF)
-val ObsidianStrokeSoft = Color(0x14FFFFFF)
+// Matte charcoal / Spotify-inspired flagship palette (calm, neutral, zero neon clutter)
+val ObsidianBg = Color(0xFF121212)
+val ObsidianSurface = Color(0xFF181818)
+val ObsidianCard = Color(0xFF242424)
+val ObsidianCardElevated = Color(0xFF2C2C2C)
+val ObsidianStroke = Color(0xFF2E2E2E)
+val ObsidianStrokeSoft = Color(0xFF242424)
 
-val EmeraldAccent = Color(0xFF1ED760)
-val EmeraldDeep = Color(0xFF0F7A38)
-val CyanGlow = Color(0xFF00E5FF)
-val VioletPulse = Color(0xFF8C6EFF)
-val CoralHeart = Color(0xFFFF4D6D)
-val AmberGold = Color(0xFFFFB74D)
+val EmeraldAccent = Color(0xFF1DB954)
+val EmeraldDeep = Color(0xFF145C2E)
+val CyanGlow = Color(0xFF4EA8DE)
+val VioletPulse = Color(0xFF7B68EE)
+val CoralHeart = Color(0xFFE94F64)
+val AmberGold = Color(0xFFE0A458)
 
-val TextPrimary = Color(0xFFF6F8FC)
-val TextSecondary = Color(0xFFA7B1C2)
-val TextMuted = Color(0xFF6B7689)
+val TextPrimary = Color(0xFFFFFFFF)
+val TextSecondary = Color(0xFFA7A7A7)
+val TextMuted = Color(0xFF727272)
 
 val LocalSonoraAccent = compositionLocalOf { EmeraldAccent }
 
 val PlaylistCoverPalettes: List<Pair<Long, Long>> = listOf(
-    0xFF1ED760L to 0xFF0B2F24L,
-    0xFF00E5FFL to 0xFF0F2744L,
-    0xFFFF4D6DL to 0xFF3E1025L,
-    0xFF8C6EFFL to 0xFF1B1540L,
-    0xFFFFB74DL to 0xFF3F230CL,
-    0xFF38BDF8L to 0xFF1E1B4BL
+    0xFF1DB954L to 0xFF163322L,
+    0xFF2D5A7BL to 0xFF162432L,
+    0xFF7A3E48L to 0xFF2D191EL,
+    0xFF4A4278L to 0xFF1E1A30L,
+    0xFF6B5335L to 0xFF282016L,
+    0xFF3E4A59L to 0xFF1A1E24L
 )
 
 private val SonoraColorScheme = darkColorScheme(
     primary = EmeraldAccent,
-    onPrimary = Color(0xFF04140A),
+    onPrimary = Color(0xFF000000),
     primaryContainer = EmeraldDeep,
     onPrimaryContainer = TextPrimary,
-    secondary = CyanGlow,
-    onSecondary = Color(0xFF03171B),
-    tertiary = VioletPulse,
+    secondary = Color(0xFF535353),
+    onSecondary = TextPrimary,
+    tertiary = TextSecondary,
     background = ObsidianBg,
     onBackground = TextPrimary,
     surface = ObsidianSurface,
@@ -62,30 +63,31 @@ private val SonoraColorScheme = darkColorScheme(
 private val SonoraTypography = Typography(
     displaySmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
-        letterSpacing = (-0.6).sp
+        fontWeight = FontWeight.Bold,
+        fontSize = 26.sp,
+        lineHeight = 32.sp,
+        letterSpacing = (-0.4).sp
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
-        fontSize = 24.sp,
-        lineHeight = 30.sp,
-        letterSpacing = (-0.4).sp
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = (-0.3).sp
     ),
     headlineSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
+        fontSize = 19.sp,
+        lineHeight = 24.sp,
         letterSpacing = (-0.2).sp
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 18.sp,
-        lineHeight = 24.sp
+        lineHeight = 23.sp,
+        letterSpacing = (-0.2).sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -116,7 +118,7 @@ private val SonoraTypography = Typography(
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.4.sp
+        letterSpacing = 0.2.sp
     )
 )
 

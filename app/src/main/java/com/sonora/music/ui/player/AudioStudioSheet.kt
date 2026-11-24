@@ -27,10 +27,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SpeakerGroup
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,8 +39,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -63,16 +61,15 @@ import com.sonora.music.model.AudioOutputDevice
 import com.sonora.music.model.AudioSettings
 import com.sonora.music.model.EqPreset
 import com.sonora.music.model.SleepTimerState
-import com.sonora.music.ui.theme.CyanGlow
+import com.sonora.music.ui.components.SonoraSlimSlider
+import com.sonora.music.ui.theme.EmeraldAccent
 import com.sonora.music.ui.theme.ObsidianBg
 import com.sonora.music.ui.theme.ObsidianCard
-import com.sonora.music.ui.theme.ObsidianCardElevated
 import com.sonora.music.ui.theme.ObsidianStroke
 import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextMuted
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
-import com.sonora.music.ui.theme.VioletPulse
 import kotlin.math.roundToInt
 
 private val EqBandLabels = listOf("60Hz", "230Hz", "910Hz", "3.6kHz", "14kHz")
@@ -80,11 +77,13 @@ private const val MIN_MB = -1200f
 private const val MAX_MB = 1200f
 private val SpeedOptions = listOf(0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
 private val SleepTimerMinutes = listOf(5, 15, 30, 45, 60)
+private val ChipUnselectedBg = Color(0xFF2A2A2A)
+private val SliderInactiveTrack = Color(0xFF4D4D4D)
 
 /**
- * Full Audio Studio sheet featuring a 5-band Equalizer with interactive Bezier frequency
- * curve, 9 EqPresets, Bass Boost & Spatial Virtualizer, Crossfade (0..12s), Sleep Timer
- * with live countdown, Playback Speed chips, Private Session toggle, and Output Device switcher.
+ * Matte charcoal Audio Studio sheet featuring a 5-band Equalizer with muted #1DB954
+ * frequency curve, flat #2A2A2A preset chips, slim vertical faders, SonoraSlimSlider
+ * dynamics controls, Sleep Timer, Playback Speed, Private Session, and Output Devices.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,7 +92,7 @@ fun AudioStudioSheet(
     sleepTimer: SleepTimerState,
     playbackSpeed: Float,
     outputDevices: List<AudioOutputDevice>,
-    accentColor: Color,
+    @Suppress("UNUSED_PARAMETER") accentColor: Color,
     onUpdateSettings: ((AudioSettings) -> AudioSettings) -> Unit,
     onApplyPreset: (EqPreset) -> Unit,
     onSetSleepTimer: (minutes: Int, endOfTrack: Boolean) -> Unit,
@@ -117,8 +116,8 @@ fun AudioStudioSheet(
                 .fillMaxWidth()
                 .fillMaxHeight(0.92f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
             Row(
@@ -132,21 +131,22 @@ fun AudioStudioSheet(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
-                            .background(accentColor.copy(alpha = 0.16f)),
+                            .background(ChipUnselectedBg),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Equalizer,
+                            imageVector = Icons.Rounded.Tune,
                             contentDescription = null,
-                            tint = accentColor
+                            tint = EmeraldAccent,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                     Column {
                         Text(
                             text = "Audio Studio",
-                            style = MaterialTheme.typography.headlineSmall,
+                            style = MaterialTheme.typography.titleLarge,
                             color = TextPrimary
                         )
                         Text(
@@ -182,7 +182,7 @@ fun AudioStudioSheet(
                         Text(
                             text = if (audioSettings.eqEnabled) audioSettings.eqPreset.label else "Bypassed",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (audioSettings.eqEnabled) accentColor else TextMuted
+                            color = if (audioSettings.eqEnabled) EmeraldAccent else TextMuted
                         )
                     }
 
@@ -192,15 +192,17 @@ fun AudioStudioSheet(
                             onUpdateSettings { it.copy(eqEnabled = enabled) }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = ObsidianBg,
-                            checkedTrackColor = accentColor
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = EmeraldAccent,
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = ChipUnselectedBg
                         )
                     )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 9 EqPreset chips
+                // 9 flat EqPreset chips
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -212,30 +214,28 @@ fun AudioStudioSheet(
                         StudioChip(
                             label = preset.label,
                             selected = selected,
-                            accentColor = accentColor,
                             onClick = { onApplyPreset(preset) }
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Interactive EQ Frequency Curve Canvas
+                // Muted #1DB954 EQ Frequency Curve Canvas
                 EqCurveCanvas(
                     bandLevelsMb = bands,
                     enabled = audioSettings.eqEnabled,
-                    accentColor = accentColor,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(110.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(ObsidianBg.copy(alpha = 0.65f))
-                        .border(1.dp, ObsidianStroke, RoundedCornerShape(14.dp))
+                        .height(104.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ObsidianBg)
+                        .border(1.dp, ObsidianStroke, RoundedCornerShape(10.dp))
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // 5 Vertical Frequency Sliders
+                // 5 Clean Vertical Frequency Faders
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
@@ -245,7 +245,6 @@ fun AudioStudioSheet(
                             frequencyLabel = EqBandLabels[index],
                             levelMb = levelMb,
                             enabled = audioSettings.eqEnabled,
-                            accentColor = accentColor,
                             onLevelChange = { updatedMb ->
                                 onUpdateSettings { current ->
                                     val updated = current.bandLevelsMb.toMutableList()
@@ -264,46 +263,46 @@ fun AudioStudioSheet(
                 }
             }
 
-            // Bass Boost, Virtualizer & Crossfade Card
+            // Bass Boost, Virtualizer & Crossfade Card with SonoraSlimSlider
             StudioCard {
                 Text(
                     text = "Dynamics & Spatial",
                     style = MaterialTheme.typography.titleMedium,
                     color = TextPrimary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                LabeledSlider(
+                LabeledSlimSlider(
                     title = "Bass Boost",
                     valueLabel = "${(audioSettings.bassBoostStrength / 10f).roundToInt()}%",
                     value = audioSettings.bassBoostStrength.toFloat(),
                     valueRange = 0f..1000f,
-                    accentColor = accentColor,
                     onValueChange = { v ->
                         onUpdateSettings { it.copy(bassBoostStrength = v.roundToInt()) }
                     }
                 )
 
-                LabeledSlider(
+                Spacer(modifier = Modifier.height(14.dp))
+
+                LabeledSlimSlider(
                     title = "Spatial Virtualizer",
                     valueLabel = "${(audioSettings.virtualizerStrength / 10f).roundToInt()}%",
                     value = audioSettings.virtualizerStrength.toFloat(),
                     valueRange = 0f..1000f,
-                    accentColor = CyanGlow,
                     onValueChange = { v ->
                         onUpdateSettings { it.copy(virtualizerStrength = v.roundToInt()) }
                     }
                 )
 
-                LabeledSlider(
+                Spacer(modifier = Modifier.height(14.dp))
+
+                LabeledSlimSlider(
                     title = "Crossfade Transitions",
                     valueLabel = if (audioSettings.crossfadeSeconds == 0) "Off" else "${audioSettings.crossfadeSeconds}s",
                     value = audioSettings.crossfadeSeconds.toFloat(),
                     valueRange = 0f..12f,
-                    steps = 11,
-                    accentColor = VioletPulse,
                     onValueChange = { v ->
-                        onUpdateSettings { it.copy(crossfadeSeconds = v.roundToInt()) }
+                        onUpdateSettings { it.copy(crossfadeSeconds = v.roundToInt().coerceIn(0, 12)) }
                     }
                 )
             }
@@ -317,7 +316,7 @@ fun AudioStudioSheet(
                     Icon(
                         imageVector = Icons.Rounded.Speed,
                         contentDescription = null,
-                        tint = accentColor,
+                        tint = TextSecondary,
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
@@ -338,7 +337,6 @@ fun AudioStudioSheet(
                         StudioChip(
                             label = "${speed}x",
                             selected = active,
-                            accentColor = accentColor,
                             onClick = {
                                 onUpdateSettings { it.copy(playbackSpeed = speed) }
                             }
@@ -361,7 +359,7 @@ fun AudioStudioSheet(
                         Icon(
                             imageVector = Icons.Rounded.Bedtime,
                             contentDescription = null,
-                            tint = CyanGlow,
+                            tint = TextSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
@@ -375,7 +373,7 @@ fun AudioStudioSheet(
                         Text(
                             text = formatSleepCountdown(sleepTimer),
                             style = MaterialTheme.typography.labelLarge,
-                            color = CyanGlow
+                            color = EmeraldAccent
                         )
                     }
                 }
@@ -392,21 +390,18 @@ fun AudioStudioSheet(
                         StudioChip(
                             label = "${mins}m",
                             selected = sleepTimer.active && !sleepTimer.endOfTrack && sleepTimer.label == "${mins}m",
-                            accentColor = CyanGlow,
                             onClick = { onSetSleepTimer(mins, false) }
                         )
                     }
                     StudioChip(
                         label = "End of Track",
                         selected = sleepTimer.active && sleepTimer.endOfTrack,
-                        accentColor = CyanGlow,
                         onClick = { onSetSleepTimer(0, true) }
                     )
                     if (sleepTimer.active) {
                         StudioChip(
                             label = "Off",
                             selected = false,
-                            accentColor = accentColor,
                             onClick = onCancelSleepTimer
                         )
                     }
@@ -428,7 +423,7 @@ fun AudioStudioSheet(
                         Icon(
                             imageVector = Icons.Rounded.VisibilityOff,
                             contentDescription = null,
-                            tint = VioletPulse,
+                            tint = TextSecondary,
                             modifier = Modifier.size(20.dp)
                         )
                         Column {
@@ -451,8 +446,10 @@ fun AudioStudioSheet(
                             onUpdateSettings { it.copy(privateSession = isPrivate) }
                         },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = ObsidianBg,
-                            checkedTrackColor = VioletPulse
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = EmeraldAccent,
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = ChipUnselectedBg
                         )
                     )
                 }
@@ -472,7 +469,7 @@ fun AudioStudioSheet(
                         Icon(
                             imageVector = Icons.Rounded.SpeakerGroup,
                             contentDescription = null,
-                            tint = accentColor,
+                            tint = TextSecondary,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
@@ -509,16 +506,9 @@ fun AudioStudioSheet(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(
-                                        if (device.isActive) accentColor.copy(alpha = 0.14f)
-                                        else ObsidianBg.copy(alpha = 0.45f)
-                                    )
-                                    .border(
-                                        width = 1.dp,
-                                        color = if (device.isActive) accentColor.copy(alpha = 0.5f) else ObsidianStroke,
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (device.isActive) ChipUnselectedBg else ObsidianBg)
+                                    .border(1.dp, ObsidianStroke, RoundedCornerShape(8.dp))
                                     .padding(horizontal = 12.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -539,7 +529,7 @@ fun AudioStudioSheet(
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(50))
-                                            .background(accentColor)
+                                            .background(EmeraldAccent)
                                             .padding(horizontal = 8.dp, vertical = 2.dp)
                                     ) {
                                         Text(
@@ -548,7 +538,7 @@ fun AudioStudioSheet(
                                                 fontWeight = FontWeight.Bold,
                                                 fontSize = 10.sp
                                             ),
-                                            color = ObsidianBg
+                                            color = Color.Black
                                         )
                                     }
                                 }
@@ -562,10 +552,10 @@ fun AudioStudioSheet(
                 Button(
                     onClick = onOpenOutputPicker,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = accentColor,
-                        contentColor = ObsidianBg
+                        containerColor = EmeraldAccent,
+                        contentColor = Color.Black
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(50),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -584,7 +574,6 @@ fun AudioStudioSheet(
 private fun EqCurveCanvas(
     bandLevelsMb: List<Int>,
     enabled: Boolean,
-    accentColor: Color,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
@@ -596,7 +585,7 @@ private fun EqCurveCanvas(
         val usableH = (h - padY * 2f).coerceAtLeast(1f)
         val centerY = padY + usableH / 2f
 
-        // Zero-dB center line & subtle dB guides
+        // Subtle horizontal dB guides
         drawLine(
             color = Color.White.copy(alpha = 0.14f),
             start = Offset(padX, centerY),
@@ -641,12 +630,12 @@ private fun EqCurveCanvas(
                 close()
             }
 
-            val activeTint = if (enabled) accentColor else TextMuted
+            val lineTint = if (enabled) EmeraldAccent else TextMuted
             drawPath(
                 path = fillPath,
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        activeTint.copy(alpha = if (enabled) 0.34f else 0.12f),
+                        lineTint.copy(alpha = if (enabled) 0.18f else 0.06f),
                         Color.Transparent
                     ),
                     startY = padY,
@@ -656,22 +645,14 @@ private fun EqCurveCanvas(
 
             drawPath(
                 path = linePath,
-                brush = Brush.horizontalGradient(
-                    colors = if (enabled) listOf(accentColor, CyanGlow, VioletPulse)
-                    else listOf(TextMuted, TextMuted)
-                ),
-                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                color = lineTint,
+                style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
             )
 
             points.forEach { pt ->
                 drawCircle(
-                    color = activeTint.copy(alpha = 0.32f),
-                    radius = 8.dp.toPx(),
-                    center = pt
-                )
-                drawCircle(
-                    color = TextPrimary,
-                    radius = 4.dp.toPx(),
+                    color = if (enabled) Color.White else TextMuted,
+                    radius = 3.5.dp.toPx(),
                     center = pt
                 )
             }
@@ -684,13 +665,12 @@ private fun VerticalEqSlider(
     frequencyLabel: String,
     levelMb: Int,
     enabled: Boolean,
-    accentColor: Color,
     onLevelChange: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val dbValue = (levelMb / 100f).roundToInt()
     val dbText = if (dbValue > 0) "+${dbValue}dB" else "${dbValue}dB"
-    val activeColor = if (enabled) accentColor else TextMuted
+    val activeColor = if (enabled) EmeraldAccent else TextMuted
 
     Column(
         modifier = modifier,
@@ -700,7 +680,7 @@ private fun VerticalEqSlider(
             text = dbText,
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             ),
             color = if (enabled && dbValue != 0) activeColor else TextSecondary
         )
@@ -709,12 +689,12 @@ private fun VerticalEqSlider(
 
         Box(
             modifier = Modifier
-                .width(42.dp)
-                .height(126.dp)
+                .width(40.dp)
+                .height(124.dp)
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     fun updateFromY(posY: Float) {
-                        val pad = 10.dp.toPx()
+                        val pad = 8.dp.toPx()
                         val usable = (size.height - pad * 2f).coerceAtLeast(1f)
                         val fraction = (1f - ((posY - pad) / usable)).coerceIn(0f, 1f)
                         val newMb = (MIN_MB + fraction * (MAX_MB - MIN_MB)).roundToInt()
@@ -734,18 +714,18 @@ private fun VerticalEqSlider(
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val trackX = size.width / 2f
-                val topY = 10.dp.toPx()
-                val bottomY = size.height - 10.dp.toPx()
+                val topY = 8.dp.toPx()
+                val bottomY = size.height - 8.dp.toPx()
                 val usableH = (bottomY - topY).coerceAtLeast(1f)
                 val norm = ((levelMb.toFloat() - MIN_MB) / (MAX_MB - MIN_MB)).coerceIn(0f, 1f)
                 val thumbY = topY + (1f - norm) * usableH
                 val zeroY = topY + 0.5f * usableH
 
                 drawLine(
-                    color = Color.White.copy(alpha = 0.14f),
+                    color = SliderInactiveTrack,
                     start = Offset(trackX, topY),
                     end = Offset(trackX, bottomY),
-                    strokeWidth = 4.dp.toPx(),
+                    strokeWidth = 3.dp.toPx(),
                     cap = StrokeCap.Round
                 )
 
@@ -753,18 +733,13 @@ private fun VerticalEqSlider(
                     color = activeColor,
                     start = Offset(trackX, zeroY),
                     end = Offset(trackX, thumbY),
-                    strokeWidth = 4.dp.toPx(),
+                    strokeWidth = 3.dp.toPx(),
                     cap = StrokeCap.Round
                 )
 
                 drawCircle(
-                    color = activeColor.copy(alpha = 0.30f),
-                    radius = 12.dp.toPx(),
-                    center = Offset(trackX, thumbY)
-                )
-                drawCircle(
-                    color = TextPrimary,
-                    radius = 6.5.dp.toPx(),
+                    color = if (enabled) Color.White else TextSecondary,
+                    radius = 5.5.dp.toPx(),
                     center = Offset(trackX, thumbY)
                 )
             }
@@ -781,14 +756,12 @@ private fun VerticalEqSlider(
 }
 
 @Composable
-private fun LabeledSlider(
+private fun LabeledSlimSlider(
     title: String,
     valueLabel: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
-    accentColor: Color,
-    onValueChange: (Float) -> Unit,
-    steps: Int = 0
+    onValueChange: (Float) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -804,19 +777,17 @@ private fun LabeledSlider(
             Text(
                 text = valueLabel,
                 style = MaterialTheme.typography.labelLarge,
-                color = accentColor
+                color = TextPrimary
             )
         }
-        Slider(
+        Spacer(modifier = Modifier.height(6.dp))
+        SonoraSlimSlider(
             value = value,
             onValueChange = onValueChange,
             valueRange = valueRange,
-            steps = steps,
-            colors = SliderDefaults.colors(
-                thumbColor = TextPrimary,
-                activeTrackColor = accentColor,
-                inactiveTrackColor = Color.White.copy(alpha = 0.14f)
-            )
+            activeColor = EmeraldAccent,
+            inactiveColor = SliderInactiveTrack,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
@@ -825,25 +796,19 @@ private fun LabeledSlider(
 private fun StudioChip(
     label: String,
     selected: Boolean,
-    accentColor: Color,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .background(if (selected) accentColor else ObsidianCardElevated)
-            .border(
-                width = 1.dp,
-                color = if (selected) accentColor else ObsidianStroke,
-                shape = RoundedCornerShape(50)
-            )
+            .background(if (selected) EmeraldAccent else ChipUnselectedBg)
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp, vertical = 7.dp)
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
-            color = if (selected) ObsidianBg else TextPrimary
+            color = if (selected) Color.Black else TextPrimary
         )
     }
 }
@@ -855,9 +820,9 @@ private fun StudioCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(ObsidianCard.copy(alpha = 0.78f))
-            .border(1.dp, ObsidianStroke, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(ObsidianCard)
+            .border(1.dp, ObsidianStroke, RoundedCornerShape(12.dp))
             .padding(16.dp)
     ) {
         content()

@@ -1,23 +1,18 @@
 package com.sonora.music.ui.components
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LibraryMusic
@@ -29,13 +24,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -44,82 +35,56 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sonora.music.model.AppTab
 import com.sonora.music.ui.theme.ObsidianBg
-import com.sonora.music.ui.theme.ObsidianCardElevated
-import com.sonora.music.ui.theme.ObsidianStroke
-import com.sonora.music.ui.theme.TextSecondary
+import com.sonora.music.ui.theme.ObsidianCard
+
+private val NavInactiveColor = Color(0xFF8E8E8E)
 
 /**
- * Sleek floating translucent navigation pill with spring-scaled active icon
- * and dynamic emerald/accent highlight capsule.
+ * Docked solid opaque navigation bar with a subtle 1.dp hairline top divider
+ * and clean Home, Search, and Library destinations.
  */
 @Composable
 fun BottomNavBar(
     currentTab: AppTab,
-    accentColor: Color,
+    @Suppress("UNUSED_PARAMETER") accentColor: Color,
     onSelectTab: (AppTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
-    val barShape = RoundedCornerShape(28.dp)
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxWidth()
+            .background(ObsidianBg)
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(ObsidianCard)
+        )
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(barShape)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            ObsidianCardElevated.copy(alpha = 0.94f),
-                            ObsidianBg.copy(alpha = 0.96f)
-                        )
-                    )
-                )
-                .border(1.dp, ObsidianStroke, barShape)
-                .padding(horizontal = 8.dp, vertical = 7.dp),
+                .height(58.dp)
+                .padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
             AppTab.entries.forEach { tab ->
                 val selected = tab == currentTab
-                val iconScale by animateFloatAsState(
-                    targetValue = if (selected) 1.15f else 1f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    ),
-                    label = "nav_scale_${tab.name}"
-                )
-                val pillBg by animateColorAsState(
-                    targetValue = if (selected) accentColor.copy(alpha = 0.18f) else Color.Transparent,
-                    label = "nav_bg_${tab.name}"
-                )
-                val contentTint by animateColorAsState(
-                    targetValue = if (selected) accentColor else TextSecondary,
-                    label = "nav_tint_${tab.name}"
-                )
-
+                val tint = if (selected) Color.White else NavInactiveColor
                 val icon = when (tab) {
                     AppTab.HOME -> if (selected) Icons.Rounded.Home else Icons.Outlined.Home
                     AppTab.SEARCH -> if (selected) Icons.Rounded.Search else Icons.Outlined.Search
                     AppTab.LIBRARY -> if (selected) Icons.Rounded.LibraryMusic else Icons.Outlined.LibraryMusic
                 }
 
-                Row(
+                Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(pillBg)
-                        .border(
-                            width = if (selected) 1.dp else 0.dp,
-                            color = if (selected) accentColor.copy(alpha = 0.36f) else Color.Transparent,
-                            shape = RoundedCornerShape(22.dp)
-                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -129,26 +94,25 @@ fun BottomNavBar(
                             }
                             onSelectTab(tab)
                         }
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = tab.label,
-                        tint = contentTint,
-                        modifier = Modifier
-                            .size(21.dp)
-                            .scale(iconScale)
+                        tint = tint,
+                        modifier = Modifier.size(24.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = tab.label,
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                         ),
-                        color = contentTint
+                        color = tint,
+                        maxLines = 1
                     )
                 }
             }

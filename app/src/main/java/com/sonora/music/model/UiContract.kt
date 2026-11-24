@@ -15,9 +15,15 @@ enum class SearchCategory(val label: String) {
 data class HomeFeedState(
     val isLoading: Boolean = true,
     val isOffline: Boolean = false,
-    val selectedGenre: String = "All",
+    val selectedFilter: String = "All",
+    val selectedGenre: String = "OPM",
     val quickPicks: List<Track> = emptyList(),
     val madeForYou: List<Playlist> = emptyList(),
+    val phTopTracks: List<Track> = emptyList(),
+    val opmTracks: List<Track> = emptyList(),
+    val phArtists: List<Artist> = emptyList(),
+    val globalTopTracks: List<Track> = emptyList(),
+    val globalArtists: List<Artist> = emptyList(),
     val trendingTracks: List<Track> = emptyList(),
     val genreTracks: List<Track> = emptyList(),
     val trendingPlaylists: List<Playlist> = emptyList(),
@@ -78,8 +84,8 @@ data class SonoraUiState(
     val isLoadingLyrics: Boolean = false,
     val outputDevices: List<AudioOutputDevice> = emptyList(),
     val wrappedStats: WrappedStats = WrappedStats(),
-    val dominantAccent: Color = Color(0xFF1ED760),
-    val showIntroOverlay: Boolean = true,
+    val dominantAccent: Color = Color(0xFF1DB954),
+    val showIntroOverlay: Boolean = false,
     val isFullPlayerOpen: Boolean = false,
     val isLyricsOpen: Boolean = false,
     val isQueueOpen: Boolean = false,
@@ -161,6 +167,8 @@ interface SonoraActions {
     fun shareTrack(track: Track)
     fun sharePlaylist(playlist: Playlist)
     fun shareWrapped()
+    fun selectHomeFilter(filter: String)
+    fun openFullTrackExternal(track: Track)
     fun loadMoreGenre(genre: String)
     fun refreshHome()
     fun dismissSnackbar()

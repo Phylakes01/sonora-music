@@ -21,8 +21,8 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.sonora.music.data.local.SonoraStore
 import com.sonora.music.data.network.AudiobookApi
-import com.sonora.music.data.network.AudiusApi
 import com.sonora.music.data.network.LyricsApi
+import com.sonora.music.data.network.MusicCatalogApi
 import com.sonora.music.data.network.PodcastApi
 import com.sonora.music.data.network.RadioApi
 import com.sonora.music.data.repository.RecommendationEngine
@@ -34,7 +34,6 @@ import com.sonora.music.model.AudioSettings
 import com.sonora.music.model.DetailRoute
 import com.sonora.music.model.DetailState
 import com.sonora.music.model.EqPreset
-import com.sonora.music.model.HomeFeedState
 import com.sonora.music.model.LibraryState
 import com.sonora.music.model.ListeningEvent
 import com.sonora.music.model.Playlist
@@ -42,6 +41,7 @@ import com.sonora.music.model.SearchCategory
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
 import com.sonora.music.player.PlaybackController
 import com.sonora.music.ui.theme.EmeraldAccent
 import kotlinx.coroutines.Dispatchers
@@ -61,13 +61,17 @@ import kotlin.math.abs
 class SonoraViewModel(application: Application) : AndroidViewModel(application), SonoraActions {
 
     private val store = SonoraStore(application)
-    private val audiusApi = AudiusApi()
+    private val catalogApi = MusicCatalogApi()
     private val lyricsApi = LyricsApi()
     private val podcastApi = PodcastApi()
     private val audiobookApi = AudiobookApi()
     private val radioApi = RadioApi()
-    private val recommendationEngine = RecommendationEngine(audiusApi)
-    private val downloadManager = DownloadManager(application, store)
+    private val recommendationEngine = RecommendationEngine(catalogApi)
+    private val downloadManager = DownloadManager(
+        context = application,
+        store = store,
+        streamUrlResolver = { catalogApi.resolveFreshStreamUrl(it) }
+    )
     private val localAudioScanner = LocalAudioScanner(application)
 
     private val playbackController = PlaybackController(
@@ -78,13 +82,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         },
         onTrackListened = { track, listenedMs ->
             recordListeningEvent(track, listenedMs)
-        }
+        },
+        streamUrlResolver = { catalogApi.resolveFreshStreamUrl(it) }
     )
 
     private val _uiState = MutableStateFlow(SonoraUiState())
     val uiState: StateFlow<SonoraUiState> = _uiState.asStateFlow()
 
     private var permissionRequester: (() -> Unit)? = null
+    private var initialLoadJob: Job? = null
     private var homeJob: Job? = null
     private var searchJob: Job? = null
     private var genreJob: Job? = null
@@ -94,7 +100,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private var activeTrackMetaId: String? = null
 
     init {
-        loadInitialLocalState()
+        initialLoadJob = loadInitialLocalState()
         observePlaybackAndDownloads()
         playbackController.connect()
         refreshHome()
@@ -140,7 +146,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    private fun loadInitialLocalState() {
+    private fun loadInitialLocalState(): Job = viewModelScope.launch(Dispatchers.IO) {
         val playlists = store.loadPlaylists()
         val liked = store.loadLikedSongs()
         val followed = store.loadFollowedArtistIds()
@@ -155,16 +161,26 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             .distinctBy { it.trackId }
             .take(15)
             .map { ev ->
+                val inferredSource = when {
+                    ev.trackId.startsWith("dz_") -> TrackSource.DEEZER
+                    ev.trackId.startsWith("it_") -> TrackSource.ITUNES
+                    ev.trackId.startsWith("pod_") -> TrackSource.PODCAST
+                    ev.trackId.startsWith("ab_") -> TrackSource.AUDIOBOOK
+                    ev.trackId.startsWith("radio_") -> TrackSource.RADIO
+                    ev.trackId.startsWith("local_") -> TrackSource.LOCAL
+                    else -> TrackSource.DEEZER
+                }
                 Track(
                     id = ev.trackId,
                     title = ev.title,
                     artist = ev.artist,
                     genre = ev.genre,
-                    artworkUrl = ev.artworkUrl
+                    artworkUrl = ev.artworkUrl,
+                    source = inferredSource,
+                    isLive = inferredSource == TrackSource.RADIO,
+                    isPreviewOnly = inferredSource == TrackSource.DEEZER || inferredSource == TrackSource.ITUNES
                 )
             }
-
-        playbackController.setAudioSettings(audioSettings)
 
         _uiState.update { state ->
             state.copy(
@@ -182,6 +198,10 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 ),
                 downloads = downloadManager.downloadsState.value
             )
+        }
+
+        withContext(Dispatchers.Main) {
+            playbackController.setAudioSettings(audioSettings)
         }
     }
 
@@ -309,13 +329,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             }
         }
 
-        // Fallback deterministic vivid hue from track title
+        // Fallback muted hue from track title
         val palette = listOf(
             EmeraldAccent,
-            Color(0xFF00E5FF),
-            Color(0xFF8C6EFF),
-            Color(0xFFFF6B8B),
-            Color(0xFFFFB74D)
+            Color(0xFF4EA8DE),
+            Color(0xFF7B68EE),
+            Color(0xFFE94F64),
+            Color(0xFFE0A458)
         )
         palette[abs(track.title.hashCode()) % palette.size]
     }
@@ -360,8 +380,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
 
         val bestPixel = bucketColors[bestEntry.key] ?: return null
         android.graphics.Color.colorToHSV(bestPixel, hsv)
-        hsv[1] = hsv[1].coerceIn(0.58f, 0.92f)
-        hsv[2] = hsv[2].coerceIn(0.74f, 0.96f)
+        hsv[1] = hsv[1].coerceIn(0.38f, 0.78f)
+        hsv[2] = hsv[2].coerceIn(0.48f, 0.84f)
         return Color(android.graphics.Color.HSVToColor(hsv))
     }
 
@@ -694,7 +714,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun downloadPlaylist(tracks: List<Track>) {
-        val downloadable = tracks.filter { !it.isLive && it.streamUrl.isNotBlank() }
+        val downloadable = tracks.filter { !it.isLive && (it.streamUrl.isNotBlank() || it.source == TrackSource.DEEZER) }
         if (downloadable.isEmpty()) {
             showSnackbar("No downloadable tracks in this list")
             return
@@ -774,12 +794,12 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private suspend fun executeSearch(cleanQuery: String, saveToHistoryAfterSettle: Boolean) {
         _uiState.update { it.copy(search = it.search.copy(isSearching = true)) }
         supervisorScope {
-            val songsDef = async { audiusApi.searchTracks(cleanQuery, limit = 30) }
-            val artistsDef = async { audiusApi.searchArtists(cleanQuery, limit = 15) }
-            val playlistsDef = async { audiusApi.searchPlaylists(cleanQuery, limit = 15) }
-            val podcastsDef = async { podcastApi.searchPodcasts(cleanQuery, limit = 16) }
-            val booksDef = async { audiobookApi.searchAudiobooks(cleanQuery, limit = 16) }
-            val radioDef = async { radioApi.searchStations(cleanQuery, limit = 20) }
+            val songsDef = async { runCatching { catalogApi.searchTracks(cleanQuery, limit = 30) }.getOrDefault(emptyList()) }
+            val artistsDef = async { runCatching { catalogApi.searchArtists(cleanQuery, limit = 15) }.getOrDefault(emptyList()) }
+            val playlistsDef = async { runCatching { catalogApi.searchPlaylists(cleanQuery, limit = 15) }.getOrDefault(emptyList()) }
+            val podcastsDef = async { runCatching { podcastApi.searchPodcasts(cleanQuery, limit = 16, country = "PH") }.getOrDefault(emptyList()) }
+            val booksDef = async { runCatching { audiobookApi.searchAudiobooks(cleanQuery, limit = 16) }.getOrDefault(emptyList()) }
+            val radioDef = async { runCatching { radioApi.searchStations(cleanQuery, limit = 20) }.getOrDefault(emptyList()) }
 
             val songs = songsDef.await()
             val artists = artistsDef.await()
@@ -921,7 +941,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 }
                 if (needsFetch) {
                     detailJob = viewModelScope.launch {
-                        val fetched = audiusApi.getPlaylistTracks(latestUserPlaylist.id)
+                        val fetched = runCatching {
+                            catalogApi.getPlaylistTracks(latestUserPlaylist.id)
+                        }.getOrDefault(emptyList())
                         val hydrated = latestUserPlaylist.copy(
                             tracks = fetched,
                             trackIds = fetched.map { t -> t.id }
@@ -950,11 +972,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     )
                 }
                 detailJob = viewModelScope.launch {
-                    val tracks = if (route.artist.id.isNotBlank()) {
-                        audiusApi.getArtistTracks(route.artist.id, limit = 30)
-                    } else {
-                        audiusApi.searchTracks(route.artist.name, limit = 25)
-                    }
+                    val tracks = runCatching {
+                        catalogApi.getArtistTopTracks(
+                            artistId = route.artist.id,
+                            artistName = route.artist.name,
+                            limit = 25
+                        )
+                    }.getOrDefault(emptyList())
                     _uiState.update {
                         it.copy(detail = it.detail.copy(isLoading = false, tracks = tracks))
                     }
@@ -1159,10 +1183,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun shareTrack(track: Track) {
+        val shareLink = track.externalUrl.ifBlank { track.streamUrl }
         val body = buildString {
             append("Listening to \"${track.title}\" by ${track.displayArtist} on Sonora")
-            if (track.streamUrl.isNotBlank() && !track.isLive) {
-                append("\n${track.streamUrl}")
+            if (shareLink.isNotBlank() && !track.isLive) {
+                append("\n$shareLink")
             }
         }
         launchShareSheet("Share Track", body)
@@ -1201,19 +1226,45 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         runCatching { app.startActivity(chooser) }
     }
 
+    override fun selectHomeFilter(filter: String) {
+        _uiState.update { it.copy(home = it.home.copy(selectedFilter = filter)) }
+    }
+
+    override fun openFullTrackExternal(track: Track) {
+        val rawQuery = listOf(track.title, track.displayArtist)
+            .filter { it.isNotBlank() && it != "Featured Artist" }
+            .joinToString(" ")
+        val encodedQuery = Uri.encode(rawQuery)
+        val url = "https://www.youtube.com/results?search_query=$encodedQuery"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launched = runCatching {
+            getApplication<Application>().startActivity(intent)
+            true
+        }.getOrDefault(false)
+        if (!launched) {
+            showSnackbar("No browser app found to open full song")
+        }
+    }
+
     override fun loadMoreGenre(genre: String) {
         genreJob?.cancel()
         _uiState.update { it.copy(home = it.home.copy(selectedGenre = genre)) }
         if (genre.equals("All", ignoreCase = true)) {
             _uiState.update {
-                it.copy(home = it.home.copy(genreTracks = it.home.trendingTracks))
+                it.copy(home = it.home.copy(genreTracks = it.home.phTopTracks.ifEmpty { it.home.trendingTracks }))
+            }
+            return
+        }
+        if (genre.equals("OPM", ignoreCase = true) && _uiState.value.home.opmTracks.isNotEmpty()) {
+            _uiState.update {
+                it.copy(home = it.home.copy(genreTracks = it.home.opmTracks))
             }
             return
         }
         genreJob = viewModelScope.launch {
-            val tracks = audiusApi.getTrendingTracks(genre = genre, limit = 25).ifEmpty {
-                audiusApi.searchTracks(genre, limit = 25)
-            }
+            val tracks = runCatching { catalogApi.getGenreTracks(genre, limit = 30) }.getOrDefault(emptyList())
             _uiState.update { state ->
                 if (state.home.selectedGenre == genre) {
                     state.copy(home = state.home.copy(genreTracks = tracks))
@@ -1231,54 +1282,64 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             val offlineNow = !isNetworkConnected()
 
             supervisorScope {
-                val trendingDef = async { audiusApi.getTrendingTracks(limit = 25) }
-                val undergroundDef = async { audiusApi.getUndergroundTrending(limit = 20) }
-                val playlistsDef = async { audiusApi.getTrendingPlaylists(limit = 15) }
-                val podcastsDef = async { podcastApi.searchPodcasts("music technology culture", limit = 16) }
-                val audiobooksDef = async { audiobookApi.searchAudiobooks("", limit = 16) }
-                val radioDef = async { radioApi.getTopStations(limit = 20) }
+                val phTopDef = async { runCatching { catalogApi.getPhTopTracks(40) }.getOrDefault(emptyList()) }
+                val opmDef = async { runCatching { catalogApi.getOpmTrendingTracks(35) }.getOrDefault(emptyList()) }
+                val globalTopDef = async { runCatching { catalogApi.getGlobalTopTracks(40) }.getOrDefault(emptyList()) }
+                val phArtistsDef = async { runCatching { catalogApi.getPhTrendingArtists() }.getOrDefault(emptyList()) }
+                val globalArtistsDef = async { runCatching { catalogApi.getGlobalTrendingArtists() }.getOrDefault(emptyList()) }
+                val playlistsDef = async { runCatching { catalogApi.getFeaturedPlaylists() }.getOrDefault(emptyList()) }
+                val podcastsDef = async {
+                    runCatching { podcastApi.searchPodcasts("philippines", limit = 16, country = "PH") }.getOrDefault(emptyList())
+                }
+                val audiobooksDef = async { runCatching { audiobookApi.searchAudiobooks("", limit = 16) }.getOrDefault(emptyList()) }
+                val radioDef = async { runCatching { radioApi.getPhStations(20) }.getOrDefault(emptyList()) }
 
+                initialLoadJob?.join()
                 val currentState = _uiState.value
                 val history = withContext(Dispatchers.IO) { store.loadHistory() }
                 val madeForYouDef = async {
-                    recommendationEngine.buildMadeForYou(
-                        history = history,
-                        likedSongs = currentState.library.likedSongs,
-                        followedArtistIds = currentState.library.followedArtistIds
-                    )
+                    runCatching {
+                        recommendationEngine.buildMadeForYou(
+                            history = history,
+                            likedSongs = currentState.library.likedSongs,
+                            followedArtistIds = currentState.library.followedArtistIds
+                        )
+                    }.getOrDefault(emptyList())
                 }
 
-                val trending = trendingDef.await()
-                val underground = undergroundDef.await()
+                val phTopTracks = phTopDef.await()
+                val opmTracks = opmDef.await()
+                val globalTopTracks = globalTopDef.await()
+                val phArtists = phArtistsDef.await()
+                val globalArtists = globalArtistsDef.await()
                 val playlists = playlistsDef.await()
                 val podcasts = podcastsDef.await()
                 val audiobooks = audiobooksDef.await()
-                val radio = radioDef.await()
+                val liveRadio = radioDef.await()
                 val madeForYou = madeForYouDef.await()
 
                 val selectedGenre = _uiState.value.home.selectedGenre
-                val genreTracks = if (selectedGenre.equals("All", ignoreCase = true)) {
-                    trending
-                } else {
-                    audiusApi.getTrendingTracks(genre = selectedGenre, limit = 25).ifEmpty {
-                        audiusApi.searchTracks(selectedGenre, limit = 25)
-                    }
+                val genreTracks = when {
+                    selectedGenre.equals("All", ignoreCase = true) -> phTopTracks
+                    selectedGenre.equals("OPM", ignoreCase = true) -> opmTracks
+                    else -> runCatching { catalogApi.getGenreTracks(selectedGenre, limit = 30) }.getOrDefault(emptyList())
                 }
 
+                val latestState = _uiState.value
                 val quickPicks = (
-                    _uiState.value.home.recentlyPlayed.take(3) +
-                        _uiState.value.library.likedSongs.take(3) +
-                        underground.take(6) +
-                        trending.take(6)
+                    latestState.home.recentlyPlayed.take(2) +
+                        latestState.library.likedSongs.take(2) +
+                        phTopTracks.take(6)
                     )
                     .distinctBy { it.id }
-                    .take(8)
+                    .take(6)
 
-                val allRemoteEmpty = trending.isEmpty() &&
-                    underground.isEmpty() &&
+                val allRemoteEmpty = phTopTracks.isEmpty() &&
+                    opmTracks.isEmpty() &&
+                    globalTopTracks.isEmpty() &&
                     playlists.isEmpty() &&
                     podcasts.isEmpty() &&
-                    radio.isEmpty()
+                    liveRadio.isEmpty()
 
                 _uiState.update { state ->
                     state.copy(
@@ -1287,12 +1348,17 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                             isOffline = offlineNow || allRemoteEmpty,
                             quickPicks = quickPicks,
                             madeForYou = madeForYou,
-                            trendingTracks = trending,
+                            phTopTracks = phTopTracks,
+                            opmTracks = opmTracks,
+                            phArtists = phArtists,
+                            globalTopTracks = globalTopTracks,
+                            globalArtists = globalArtists,
+                            trendingTracks = phTopTracks,
                             genreTracks = genreTracks,
                             trendingPlaylists = playlists,
                             podcasts = podcasts,
                             audiobooks = audiobooks,
-                            liveRadio = radio,
+                            liveRadio = liveRadio,
                             errorMessage = if (allRemoteEmpty) "Offline mode — saved downloads & local tracks ready" else null
                         )
                     )

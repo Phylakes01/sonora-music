@@ -18,6 +18,14 @@ class RadioApi(private val client: OkHttpClient = HttpClientProvider.client) {
             fetchStations("/json/stations/topclick/$safeLimit?hidebroken=true")
         }
 
+    suspend fun getPhStations(limit: Int = 20): List<Track> =
+        withContext(Dispatchers.IO) {
+            val safeLimit = limit.coerceIn(1, 100)
+            fetchStations(
+                "/json/stations/bycountrycodeexact/PH?limit=$safeLimit&hidebroken=true&order=clickcount&reverse=true"
+            )
+        }
+
     suspend fun searchStations(query: String, limit: Int = 25): List<Track> =
         withContext(Dispatchers.IO) {
             val trimmed = query.trim()
@@ -44,50 +52,72 @@ class RadioApi(private val client: OkHttpClient = HttpClientProvider.client) {
         return emptyList()
     }
 
-    private fun parseStations(array: JSONArray): List<Track> = buildList {
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            val name = obj.optCleanString("name")
-            val streamUrl = obj.optCleanString("url_resolved")
-                .ifBlank { obj.optCleanString("url") }
-            if (name.isEmpty() || streamUrl.isEmpty()) continue
+    private fun parseStations(array: JSONArray): List<Track> {
+        val seenIds = HashSet<String>()
+        val seenUrls = HashSet<String>()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                if (obj.has("lastcheckok") && obj.optInt("lastcheckok", 1) == 0) continue
 
-            val uuid = obj.optCleanString("stationuuid")
-                .ifBlank { obj.optCleanString("changeuuid") }
-                .ifBlank { streamUrl.hashCode().toUInt().toString() }
-            val country = obj.optCleanString("country")
-            val language = obj.optCleanString("language")
-            val tagsRaw = obj.optCleanString("tags")
-            val primaryTag = tagsRaw
-                .split(',')
-                .firstOrNull { it.isNotBlank() }
-                ?.trim()
-                ?.replaceFirstChar { it.uppercase() }
-                .orEmpty()
-            val bitrate = obj.optInt("bitrate", 0)
-            val favicon = obj.optCleanString("favicon")
-                .takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+                val name = obj.optCleanString("name")
+                val streamUrl = obj.optCleanString("url_resolved")
+                    .ifBlank { obj.optCleanString("url") }
+                if (name.isEmpty() || streamUrl.isEmpty()) continue
+                if (!streamUrl.startsWith("http://", ignoreCase = true) &&
+                    !streamUrl.startsWith("https://", ignoreCase = true)
+                ) continue
 
-            val artistLabel = listOfNotNull(
-                country.takeIf { it.isNotEmpty() },
-                language.takeIf { it.isNotEmpty() }
-            ).joinToString(" • ").ifBlank { "Live Radio" }
+                val pathPart = streamUrl.substringBefore('?')
+                if (pathPart.endsWith(".pls", ignoreCase = true) ||
+                    pathPart.endsWith(".m3u", ignoreCase = true)
+                ) continue
 
-            add(
-                Track(
-                    id = "radio_$uuid",
-                    title = name,
-                    artist = artistLabel,
-                    album = if (bitrate > 0) "${bitrate} kbps Live Stream" else "Live Radio",
-                    genre = primaryTag.ifBlank { "Live Radio" },
-                    durationSec = 0,
-                    artworkUrl = favicon,
-                    streamUrl = streamUrl,
-                    source = TrackSource.RADIO,
-                    isLive = true,
-                    playCount = obj.optLong("clickcount", 0L).coerceAtLeast(0L)
+                if (obj.has("ssl_error") &&
+                    obj.optInt("ssl_error", 0) != 0 &&
+                    streamUrl.startsWith("https://", ignoreCase = true)
+                ) continue
+
+                val uuid = obj.optCleanString("stationuuid")
+                    .ifBlank { obj.optCleanString("changeuuid") }
+                    .ifBlank { streamUrl.hashCode().toUInt().toString() }
+                val id = "radio_$uuid"
+                if (!seenIds.add(id) || !seenUrls.add(streamUrl)) continue
+
+                val country = obj.optCleanString("country")
+                val language = obj.optCleanString("language")
+                val tagsRaw = obj.optCleanString("tags")
+                val primaryTag = tagsRaw
+                    .split(',')
+                    .firstOrNull { it.isNotBlank() }
+                    ?.trim()
+                    ?.replaceFirstChar { it.uppercase() }
+                    .orEmpty()
+                val bitrate = obj.optInt("bitrate", 0)
+                val favicon = obj.optCleanString("favicon")
+                    .takeIf { it.startsWith("http://", true) || it.startsWith("https://", true) }
+
+                val artistLabel = listOfNotNull(
+                    country.takeIf { it.isNotEmpty() },
+                    language.takeIf { it.isNotEmpty() }
+                ).joinToString(" • ").ifBlank { "Live Radio" }
+
+                add(
+                    Track(
+                        id = id,
+                        title = name,
+                        artist = artistLabel,
+                        album = if (bitrate > 0) "${bitrate} kbps Live Stream" else "Live Radio",
+                        genre = primaryTag.ifBlank { "Live Radio" },
+                        durationSec = 0,
+                        artworkUrl = favicon,
+                        streamUrl = streamUrl,
+                        source = TrackSource.RADIO,
+                        isLive = true,
+                        playCount = obj.optLong("clickcount", 0L).coerceAtLeast(0L)
+                    )
                 )
-            )
+            }
         }
     }
 
