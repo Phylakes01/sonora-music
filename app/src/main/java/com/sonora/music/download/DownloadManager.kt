@@ -68,6 +68,14 @@ class DownloadManager(
         if (track.isLive || track.source == TrackSource.LOCAL) {
             return
         }
+        if (track.isVideoOnly || (track.source == TrackSource.YOUTUBE && track.streamUrl.isBlank())) {
+            _downloadErrors.tryEmit("Official YouTube videos stream in-app — tap Video to watch")
+            return
+        }
+        if (track.isPreviewOnly || isThirtySecondPreviewUrl(track.streamUrl)) {
+            _downloadErrors.tryEmit("Full song stream unavailable for ${track.title}")
+            return
+        }
         if ((track.source == TrackSource.PODCAST || track.source == TrackSource.AUDIOBOOK) &&
             track.streamUrl.isBlank()
         ) {
@@ -186,7 +194,10 @@ class DownloadManager(
                 !isThirtySecondPreviewUrl(track.streamUrl) -> track.streamUrl
             else -> ""
         }
-        if (resolvedUrl.isBlank() || isThirtySecondPreviewUrl(resolvedUrl)) {
+        if (resolvedTrack.isPreviewOnly ||
+            resolvedUrl.isBlank() ||
+            isThirtySecondPreviewUrl(resolvedUrl)
+        ) {
             throw IOException("Full song stream unavailable for ${track.title}")
         }
 
@@ -328,6 +339,7 @@ class DownloadManager(
             return false
         }
         return track.isPreviewOnly ||
+            track.isVideoOnly ||
             isThirtySecondPreviewUrl(track.streamUrl) ||
             track.streamUrl.isBlank() ||
             track.source == TrackSource.DEEZER ||

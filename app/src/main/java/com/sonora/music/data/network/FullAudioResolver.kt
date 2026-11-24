@@ -31,11 +31,19 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
     }
 
     suspend fun resolveFullTrackOrNull(track: Track): Track? = withContext(Dispatchers.IO) {
+        if (RegionalContentFilter.isExcludedTrack(track)) {
+            return@withContext null
+        }
+
         if (!track.localUri.isNullOrBlank() ||
             track.isLive ||
             track.source in ALWAYS_BYPASS_SOURCES
         ) {
-            return@withContext track
+            return@withContext if (isPreviewAudioUrl(track.streamUrl) || track.isPreviewOnly) {
+                track.copy(streamUrl = "", isPreviewOnly = false)
+            } else {
+                track
+            }
         }
 
         if (track.source == TrackSource.AUDIUS &&
@@ -166,6 +174,15 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
         candidateDescription: String = ""
     ): Int {
         if (!isStreamable || candidateDurationSec < MIN_FULL_DURATION_SEC) {
+            return -1000
+        }
+
+        if (RegionalContentFilter.isExcludedIndianContent(
+                title = candidateTitle,
+                artist = candidateUploader,
+                extra = candidateDescription
+            )
+        ) {
             return -1000
         }
 
@@ -412,7 +429,8 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             TrackSource.LOCAL,
             TrackSource.PODCAST,
             TrackSource.AUDIOBOOK,
-            TrackSource.RADIO
+            TrackSource.RADIO,
+            TrackSource.YOUTUBE
         )
 
         private val FILLER_WORDS = setOf(
@@ -495,8 +513,12 @@ class FullAudioResolver(private val client: OkHttpClient = HttpClientProvider.cl
             if (url.isBlank()) return false
             val lower = url.lowercase(Locale.ROOT)
             return lower.contains("dzcdn.net") ||
-                lower.contains("audio-ssl.itunes.apple.com") ||
-                lower.contains("itunes.apple.com")
+                lower.contains("cdns-preview") ||
+                lower.contains("cdnt-preview") ||
+                lower.contains("audio-ssl.itunes") ||
+                lower.contains("itunes.apple.com") ||
+                lower.endsWith(".m4a") ||
+                lower.contains(".m4a?")
         }
     }
 }

@@ -3,6 +3,9 @@
 -keepattributes InnerClasses
 
 -keep class com.sonora.music.** { *; }
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
 -keep class androidx.media3.** { *; }
 -keep class okhttp3.** { *; }
 -keep class okio.** { *; }

@@ -32,6 +32,8 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,12 +58,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.sonora.music.model.DetailRoute
 import com.sonora.music.model.DownloadStatus
 import com.sonora.music.model.Playlist
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
+import com.sonora.music.ui.components.MusicVideoCard
 import com.sonora.music.ui.components.SonoraArtwork
 import com.sonora.music.ui.components.SonoraPillChip
 import com.sonora.music.ui.components.SonoraSectionHeader
@@ -79,6 +85,7 @@ import com.sonora.music.ui.theme.TextSecondary
 
 private enum class LibraryFilter(val label: String) {
     ALL("All"),
+    VIDEOS("Music Videos"),
     PLAYLISTS("Playlists"),
     LIKED("Liked"),
     DOWNLOADS("Downloads"),
@@ -97,6 +104,21 @@ fun LibraryScreen(
 ) {
     val library = state.library
     var selectedFilter by rememberSaveable { mutableStateOf(LibraryFilter.ALL) }
+
+    val musicVideos = remember(
+        state.home.musicVideos,
+        library.likedSongs,
+        library.userPlaylists
+    ) {
+        val playlistTracks = library.userPlaylists.flatMap { it.tracks }
+        (state.home.musicVideos + library.likedSongs + playlistTracks)
+            .filter {
+                it.source == TrackSource.YOUTUBE ||
+                    it.hasMusicVideo ||
+                    it.youtubeVideoId.isNotBlank()
+            }
+            .distinctBy { it.id }
+    }
 
     Box(
         modifier = modifier
@@ -129,6 +151,26 @@ fun LibraryScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF231A1D),
+                            border = BorderStroke(1.dp, Color(0xFFFF4E45).copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .size(36.dp)
+                                .sonoraPressable(shape = CircleShape) {
+                                    actions.onOpenImportYouTube()
+                                }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.SmartDisplay,
+                                    contentDescription = "Import YouTube MV",
+                                    tint = Color(0xFFFF4E45),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
                         Surface(
                             shape = CircleShape,
                             color = Color(0xFF202024),
@@ -170,16 +212,110 @@ fun LibraryScreen(
 
             // Flat Filter Chips
             item(key = "library_filters") {
+                val visibleFilters = remember(musicVideos.size, selectedFilter) {
+                    LibraryFilter.entries.filter { filter ->
+                        filter != LibraryFilter.VIDEOS ||
+                            musicVideos.isNotEmpty() ||
+                            selectedFilter == LibraryFilter.VIDEOS
+                    }
+                }
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(LibraryFilter.entries, key = { it.name }) { filter ->
+                    items(visibleFilters, key = { it.name }) { filter ->
+                        val chipLabel = if (filter == LibraryFilter.VIDEOS && musicVideos.isNotEmpty()) {
+                            "Music Videos (${musicVideos.size})"
+                        } else {
+                            filter.label
+                        }
                         SonoraPillChip(
-                            label = filter.label,
+                            label = chipLabel,
                             selected = selectedFilter == filter,
                             accentColor = EmeraldAccent,
                             onClick = { selectedFilter = filter }
+                        )
+                    }
+                }
+            }
+
+            // Quick Access: Import YouTube MV action row
+            if (selectedFilter == LibraryFilter.ALL || selectedFilter == LibraryFilter.VIDEOS) {
+                item(key = "import_youtube_mv_row") {
+                    ImportYouTubeMvQuickRow(
+                        onClick = { actions.onOpenImportYouTube() }
+                    )
+                }
+            }
+
+            // Pinned Music Videos Quick Access row in ALL
+            if (selectedFilter == LibraryFilter.ALL && musicVideos.isNotEmpty()) {
+                item(key = "pinned_music_videos") {
+                    PinnedLibraryRow(
+                        title = "Music Videos",
+                        subtitle = "${musicVideos.size} MVs • Watch or add to playlists",
+                        icon = Icons.Rounded.VideoLibrary,
+                        coverBrush = Brush.linearGradient(
+                            listOf(Color(0xFF91273A), Color(0xFF42121D))
+                        ),
+                        onClick = { selectedFilter = LibraryFilter.VIDEOS },
+                        onQuickPlay = { actions.onPlayMusicVideo(musicVideos.first(), musicVideos) }
+                    )
+                }
+            }
+
+            // Music Videos Dedicated Filter View
+            if (selectedFilter == LibraryFilter.VIDEOS) {
+                item(key = "lib_videos_header") {
+                    SonoraSectionHeader(
+                        title = "Music Videos (${musicVideos.size})",
+                        subtitle = "Tap to watch or use 3-dot menu to add to playlists",
+                        actionLabel = "+ Import MV",
+                        onActionClick = { actions.onOpenImportYouTube() },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+
+                if (musicVideos.isNotEmpty()) {
+                    item(key = "lib_videos_carousel") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(musicVideos.take(10), key = { "lib_mv_card_${it.id}" }) { video ->
+                                val isCurrent = state.playback.currentTrack?.id == video.id
+                                MusicVideoCard(
+                                    track = video,
+                                    isCurrent = isCurrent,
+                                    isPlaying = isCurrent && state.playback.isPlaying,
+                                    isLiked = video.id in state.likedTrackIds,
+                                    onClick = { actions.onPlayMusicVideo(video, musicVideos) },
+                                    onLikeClick = { actions.toggleLike(video) },
+                                    onMoreClick = { onTrackOverflow(video) },
+                                    modifier = Modifier.width(236.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    items(musicVideos, key = { "lib_mv_row_${it.id}" }) { track ->
+                        val isCurrent = state.playback.currentTrack?.id == track.id
+                        TrackRow(
+                            track = track,
+                            isCurrent = isCurrent,
+                            isPlaying = isCurrent && state.playback.isPlaying,
+                            isLiked = track.id in state.likedTrackIds,
+                            downloadState = state.downloads[track.id],
+                            onClick = { actions.onPlayMusicVideo(track, musicVideos) },
+                            onLikeClick = { actions.toggleLike(track) },
+                            onDownloadClick = {
+                                if (state.downloads[track.id]?.status == DownloadStatus.DOWNLOADED) {
+                                    actions.deleteDownload(track.id)
+                                } else {
+                                    actions.downloadTrack(track)
+                                }
+                            },
+                            onMoreClick = { onTrackOverflow(track) }
                         )
                     }
                 }
@@ -666,6 +802,74 @@ private fun LocalFilesCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImportYouTubeMvQuickRow(
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF1F191C),
+        border = BorderStroke(1.dp, Color(0xFFFF4E45).copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .sonoraPressable(shape = RoundedCornerShape(12.dp), onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFFF4E45).copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SmartDisplay,
+                    contentDescription = null,
+                    tint = Color(0xFFFF4E45),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Import YouTube MV",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Add Music Videos, playlists, or Wish 107.5 packs",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Surface(
+                shape = CircleShape,
+                color = EmeraldAccent
+            ) {
+                Text(
+                    text = "Import",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    ),
+                    color = Color.Black,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
             }
         }
     }

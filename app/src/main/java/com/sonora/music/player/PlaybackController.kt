@@ -177,7 +177,65 @@ object QueueEngine {
         val lower = url.lowercase()
         return lower.contains("dzcdn.net") ||
             lower.contains("audio-ssl.itunes.apple.com") ||
-            lower.contains("itunes.apple.com")
+            lower.contains("itunes.apple.com") ||
+            lower.contains("cdns-preview") ||
+            lower.contains("cdnt-preview")
+    }
+
+    fun isPlayableFullStreamUrl(url: String): Boolean =
+        url.isNotBlank() && !isThirtySecondPreviewUrl(url)
+
+    fun isVideoOnlyTrack(track: Track): Boolean = track.isVideoOnly
+
+    fun shouldPlayWithExoPlayer(track: Track): Boolean {
+        if (track.isVideoOnly) return false
+        return !track.localUri.isNullOrBlank() ||
+            isPlayableFullStreamUrl(track.streamUrl) ||
+            track.isLive
+    }
+
+    fun resolveNextQueueIndex(
+        currentIndex: Int,
+        queueSize: Int,
+        repeatMode: RepeatMode
+    ): Int? {
+        if (queueSize <= 0) return null
+        return when {
+            currentIndex + 1 in 0 until queueSize -> currentIndex + 1
+            repeatMode == RepeatMode.ALL -> 0
+            else -> null
+        }
+    }
+
+    fun resolvePrevQueueIndex(
+        currentIndex: Int,
+        queueSize: Int,
+        repeatMode: RepeatMode
+    ): Int? {
+        if (queueSize <= 0) return null
+        return when {
+            currentIndex - 1 in 0 until queueSize -> currentIndex - 1
+            repeatMode == RepeatMode.ALL -> queueSize - 1
+            else -> null
+        }
+    }
+
+    fun computeVideoTransitionState(
+        previous: PlaybackState,
+        queue: List<Track>,
+        index: Int
+    ): PlaybackState? {
+        val track = queue.getOrNull(index) ?: return null
+        return previous.copy(
+            currentTrack = track,
+            queue = queue,
+            currentIndex = index,
+            isPlaying = true,
+            isBuffering = false,
+            positionMs = 0L,
+            durationMs = if (track.isLive) 0L else (track.durationSec * 1000L).coerceAtLeast(0L),
+            errorMessage = null
+        )
     }
 }
 
@@ -186,7 +244,8 @@ class PlaybackController(
     private val downloadManager: DownloadManager,
     private val smartPickProvider: suspend (List<Track>, Set<String>) -> List<Track>,
     private val onTrackListened: (Track, Long) -> Unit,
-    private val trackResolver: suspend (Track) -> Track = { it }
+    private val trackResolver: suspend (Track) -> Track = { it },
+    private val onVideoTrackSelected: (Track) -> Unit = {}
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val effectsManager = AudioEffectsManager()
@@ -222,6 +281,7 @@ class PlaybackController(
     private var transitionResolveJob: Job? = null
     private var queueGeneration: Long = 0L
     private var isResolvingActiveTrack: Boolean = false
+    private var controllerHasCurrentQueue: Boolean = false
     private val retriedStreamTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val resolvedTracks = ConcurrentHashMap<String, Track>()
@@ -235,7 +295,8 @@ class PlaybackController(
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (isResolvingActiveTrack) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             updateListenTrackerPlaying(isPlaying)
             if (!isPlaying) {
                 setPlayerVolume(1f)
@@ -244,7 +305,8 @@ class PlaybackController(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (isResolvingActiveTrack) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             if (playbackState == Player.STATE_ENDED) {
                 flushListenTracker(forceIfMinimumMet = true)
                 setPlayerVolume(1f)
@@ -256,7 +318,7 @@ class PlaybackController(
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            if (isResolvingActiveTrack) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
             val controller = mediaController
             val newIdx = controller?.currentMediaItemIndex ?: -1
             val prevTrack = trackedTrack
@@ -270,6 +332,12 @@ class PlaybackController(
             if (newIdx in currentQueue.indices) {
                 currentIndex = newIdx
             }
+
+            if (nextTrack != null && nextTrack.isVideoOnly) {
+                activateVideoOnlyTrack(newIdx, nextTrack, invokeCallback = true)
+                return
+            }
+
             resetListenTrackerFor(nextTrack, isPlayingNow = controller?.isPlaying == true)
 
             if (_playbackState.value.sleepTimer.endOfTrack &&
@@ -336,7 +404,8 @@ class PlaybackController(
             newPosition: Player.PositionInfo,
             reason: Int
         ) {
-            if (isResolvingActiveTrack) return
+            if (isResolvingActiveTrack || !controllerHasCurrentQueue) return
+            if (currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) return
             val idx = mediaController?.currentMediaItemIndex ?: -1
             if (idx in currentQueue.indices) {
                 currentIndex = idx
@@ -345,10 +414,15 @@ class PlaybackController(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            if (!controllerHasCurrentQueue) return
             setPlayerVolume(1f)
             val controller = mediaController
             val failedIndex = controller?.currentMediaItemIndex?.takeIf { it in currentQueue.indices } ?: currentIndex
             val failedTrack = currentQueue.getOrNull(failedIndex)
+            if (failedTrack != null && failedTrack.isVideoOnly) {
+                activateVideoOnlyTrack(failedIndex, failedTrack, invokeCallback = true)
+                return
+            }
             if (controller != null &&
                 failedTrack != null &&
                 !hasOfflineOrLocalFile(failedTrack) &&
@@ -453,7 +527,11 @@ class PlaybackController(
         scope.cancel()
     }
 
-    fun playQueue(tracks: List<Track>, startIndex: Int = 0) {
+    fun playQueue(
+        tracks: List<Track>,
+        startIndex: Int = 0,
+        startPausedForVideo: Boolean = false
+    ) {
         if (tracks.isEmpty()) return
 
         queueGeneration++
@@ -469,7 +547,7 @@ class PlaybackController(
         val initialQueue = tracks.map(::applyCachedResolution)
         originalQueue = initialQueue
 
-        val (targetQueue, targetIndex) = if (shuffleMode == ShuffleMode.OFF) {
+        val (targetQueue, targetIndex) = if (shuffleMode == ShuffleMode.OFF || startPausedForVideo) {
             initialQueue to clampedStart
         } else {
             QueueEngine.shufflePreservingCurrent(initialQueue, clampedStart) to 0
@@ -479,6 +557,26 @@ class PlaybackController(
         currentIndex = targetIndex
         fadeInOnCurrentTrack = false
         val current = currentQueue.getOrNull(currentIndex)
+
+        if (current != null && (current.isVideoOnly || startPausedForVideo)) {
+            _playbackState.update {
+                it.copy(
+                    shuffleMode = shuffleMode,
+                    repeatMode = repeatMode,
+                    playbackSpeed = audioSettings.playbackSpeed
+                )
+            }
+            activateVideoOnlyTrack(
+                index = currentIndex,
+                track = current,
+                invokeCallback = current.isVideoOnly || startPausedForVideo
+            )
+            if (mediaController == null) {
+                connect()
+            }
+            return
+        }
+
         isResolvingActiveTrack = current != null && needsTrackResolution(current)
         resetListenTrackerFor(current, isPlayingNow = false)
 
@@ -513,10 +611,35 @@ class PlaybackController(
         applyCurrentQueueToController(controller)
     }
 
+    private fun activateVideoOnlyTrack(
+        index: Int,
+        track: Track,
+        invokeCallback: Boolean = true
+    ) {
+        isResolvingActiveTrack = false
+        controllerHasCurrentQueue = false
+        hasPendingPlayRequest = false
+        mediaController?.pause()
+        setPlayerVolume(1f)
+        currentIndex = index
+        resetListenTrackerFor(track, isPlayingNow = false)
+        _playbackState.update { state ->
+            QueueEngine.computeVideoTransitionState(state, currentQueue, index) ?: state
+        }
+        if (invokeCallback) {
+            onVideoTrackSelected(track)
+        }
+    }
+
     private fun applyCurrentQueueToController(controller: MediaController) {
         val generation = queueGeneration
         val safeIndex = currentIndex.coerceIn(0, (currentQueue.size - 1).coerceAtLeast(0))
         val activeTrack = currentQueue.getOrNull(safeIndex) ?: return
+
+        if (activeTrack.isVideoOnly) {
+            activateVideoOnlyTrack(safeIndex, activeTrack, invokeCallback = true)
+            return
+        }
 
         if (needsTrackResolution(activeTrack)) {
             isResolvingActiveTrack = true
@@ -593,6 +716,7 @@ class PlaybackController(
         val items = currentQueue.map(::buildMediaItem)
         if (items.isEmpty()) return
         val clamped = safeIndex.coerceIn(0, items.lastIndex)
+        controllerHasCurrentQueue = true
         controller.setMediaItems(items, clamped, 0L)
         controller.repeatMode = toMedia3RepeatMode(repeatMode)
         controller.setPlaybackSpeed(audioSettings.playbackSpeed.coerceIn(0.5f, 2.5f))
@@ -810,7 +934,12 @@ class PlaybackController(
             album = original.album.ifBlank { resolved.album },
             artistId = original.artistId.ifBlank { resolved.artistId },
             artworkUrl = original.artworkUrl ?: resolved.artworkUrl,
-            externalUrl = original.externalUrl.ifBlank { resolved.externalUrl }
+            externalUrl = original.externalUrl.ifBlank { resolved.externalUrl },
+            youtubeVideoId = original.youtubeVideoId.ifBlank { resolved.youtubeVideoId },
+            hasMusicVideo = original.hasMusicVideo ||
+                resolved.hasMusicVideo ||
+                original.youtubeVideoId.isNotBlank() ||
+                resolved.youtubeVideoId.isNotBlank()
         )
     }
 
@@ -819,14 +948,15 @@ class PlaybackController(
     }
 
     private fun isPlayableFullStreamUrl(url: String): Boolean {
-        return url.isNotBlank() && !isThirtySecondPreviewUrl(url)
+        return QueueEngine.isPlayableFullStreamUrl(url)
     }
 
     private fun hasPlayableMedia(track: Track): Boolean {
-        return hasOfflineOrLocalFile(track) || isPlayableFullStreamUrl(track.streamUrl)
+        return hasOfflineOrLocalFile(track) || isPlayableFullStreamUrl(track.streamUrl) || track.isVideoOnly
     }
 
     private fun isRemoteResolvableTrack(track: Track): Boolean {
+        if (track.isVideoOnly) return false
         return !hasOfflineOrLocalFile(track) &&
             !track.isLive &&
             (track.source == TrackSource.DEEZER ||
@@ -836,6 +966,7 @@ class PlaybackController(
     }
 
     private fun needsTrackResolution(track: Track): Boolean {
+        if (track.isVideoOnly) return false
         if (hasOfflineOrLocalFile(track)) return false
         if (track.isLive) return track.streamUrl.isBlank()
         if (track.streamUrl.isBlank() || isThirtySecondPreviewUrl(track.streamUrl) || track.isPreviewOnly) {
@@ -851,6 +982,7 @@ class PlaybackController(
     }
 
     private fun needsTransitionResolution(track: Track): Boolean {
+        if (track.isVideoOnly) return false
         if (hasOfflineOrLocalFile(track) || track.isLive) return false
         return track.streamUrl.isBlank() ||
             isThirtySecondPreviewUrl(track.streamUrl) ||
@@ -897,11 +1029,94 @@ class PlaybackController(
         return updatedSample ?: resolvedTrack
     }
 
-    fun togglePlayPause() {
+    fun pause() {
+        hasPendingPlayRequest = false
+        mediaController?.pause()
+        val current = currentQueue.getOrNull(currentIndex)
+        if (current?.isVideoOnly == true || !controllerHasCurrentQueue) {
+            _playbackState.update { it.copy(isPlaying = false, isBuffering = false) }
+        }
+    }
+
+    fun play() {
+        val current = currentQueue.getOrNull(currentIndex) ?: return
+        if (current.isVideoOnly) {
+            activateVideoOnlyTrack(currentIndex, current, invokeCallback = true)
+            return
+        }
         val controller = mediaController
         if (controller == null) {
+            hasPendingPlayRequest = true
+            connect()
+            return
+        }
+        if (!controllerHasCurrentQueue) {
+            hasPendingPlayRequest = false
+            applyCurrentQueueToController(controller)
+            return
+        }
+        if (controller.playbackState == Player.STATE_IDLE && currentQueue.isNotEmpty()) {
+            controller.prepare()
+        } else if (controller.playbackState == Player.STATE_ENDED) {
+            controller.seekTo(0L)
+        }
+        controller.play()
+    }
+
+    fun skipToQueueIndex(index: Int, startPausedForVideo: Boolean = false) {
+        if (index !in currentQueue.indices) return
+        queueGeneration++
+        flushListenTracker(forceIfMinimumMet = true)
+        playResolveJob?.cancel()
+        preResolveJob?.cancel()
+        transitionResolveJob?.cancel()
+
+        currentIndex = index
+        fadeInOnCurrentTrack = false
+        val target = currentQueue[index]
+
+        if (target.isVideoOnly || startPausedForVideo) {
+            activateVideoOnlyTrack(index, target, invokeCallback = target.isVideoOnly || startPausedForVideo)
+            return
+        }
+
+        isResolvingActiveTrack = needsTrackResolution(target)
+        resetListenTrackerFor(target, isPlayingNow = false)
+        _playbackState.update {
+            it.copy(
+                currentTrack = target,
+                currentIndex = index,
+                positionMs = 0L,
+                durationMs = if (target.isLive) 0L else target.durationSec * 1000L,
+                isPlaying = false,
+                isBuffering = true,
+                errorMessage = null
+            )
+        }
+
+        val controller = mediaController
+        if (controller == null) {
+            hasPendingPlayRequest = true
+            connect()
+            return
+        }
+        if (controller.isPlaying || controller.playWhenReady) {
+            controller.pause()
+        }
+        hasPendingPlayRequest = false
+        applyCurrentQueueToController(controller)
+    }
+
+    fun togglePlayPause() {
+        val currentTrack = currentQueue.getOrNull(currentIndex)
+        if (currentTrack?.isVideoOnly == true) {
+            _playbackState.update { it.copy(isPlaying = !it.isPlaying, isBuffering = false) }
+            return
+        }
+        val controller = mediaController
+        if (controller == null || !controllerHasCurrentQueue) {
             if (currentQueue.isNotEmpty()) {
-                playQueue(currentQueue, currentIndex.coerceAtLeast(0))
+                play()
             }
             return
         }
@@ -927,6 +1142,16 @@ class PlaybackController(
         setPlayerVolume(1f)
         flushListenTracker(forceIfMinimumMet = true)
 
+        val currentTrack = currentQueue.getOrNull(currentIndex)
+        val nextIdx = QueueEngine.resolveNextQueueIndex(currentIndex, currentQueue.size, repeatMode)
+        if (nextIdx != null) {
+            val nextTrack = currentQueue[nextIdx]
+            if (nextTrack.isVideoOnly || currentTrack?.isVideoOnly == true || !controllerHasCurrentQueue) {
+                skipToQueueIndex(nextIdx)
+                return
+            }
+        }
+
         val controller = mediaController ?: return
         when {
             controller.hasNextMediaItem() -> {
@@ -948,10 +1173,25 @@ class PlaybackController(
         fadeInOnCurrentTrack = false
         setPlayerVolume(1f)
 
+        val currentTrack = currentQueue.getOrNull(currentIndex)
+        if (currentTrack?.isVideoOnly == true || !controllerHasCurrentQueue) {
+            val prevIdx = QueueEngine.resolvePrevQueueIndex(currentIndex, currentQueue.size, repeatMode)
+            if (prevIdx != null) {
+                skipToQueueIndex(prevIdx)
+            }
+            return
+        }
+
         val controller = mediaController ?: return
-        if (controller.currentPosition > 3_000L && currentQueue.getOrNull(currentIndex)?.isLive != true) {
+        if (controller.currentPosition > 3_000L && currentTrack?.isLive != true) {
             controller.seekTo(0L)
             syncPlaybackStateFromPlayer()
+            return
+        }
+
+        val prevIdx = QueueEngine.resolvePrevQueueIndex(currentIndex, currentQueue.size, repeatMode)
+        if (prevIdx != null && currentQueue[prevIdx].isVideoOnly) {
+            skipToQueueIndex(prevIdx)
             return
         }
 
@@ -1059,8 +1299,10 @@ class PlaybackController(
             originalQueue + effectiveTrack
         }
 
-        mediaController?.let { mc ->
-            mc.addMediaItem(insertIndex.coerceIn(0, mc.mediaItemCount), buildMediaItem(effectiveTrack))
+        if (controllerHasCurrentQueue) {
+            mediaController?.let { mc ->
+                mc.addMediaItem(insertIndex.coerceIn(0, mc.mediaItemCount), buildMediaItem(effectiveTrack))
+            }
         }
         syncQueueMetadataOnly()
     }
@@ -1073,7 +1315,9 @@ class PlaybackController(
         }
         currentQueue = currentQueue + effectiveTrack
         originalQueue = originalQueue + effectiveTrack
-        mediaController?.addMediaItem(buildMediaItem(effectiveTrack))
+        if (controllerHasCurrentQueue) {
+            mediaController?.addMediaItem(buildMediaItem(effectiveTrack))
+        }
         syncQueueMetadataOnly()
     }
 
@@ -1083,9 +1327,11 @@ class PlaybackController(
         }
         currentQueue = QueueEngine.moveItem(currentQueue, fromIndex, toIndex)
         currentIndex = QueueEngine.computeAdjustedIndexOnMove(currentIndex, fromIndex, toIndex)
-        mediaController?.let { mc ->
-            if (fromIndex < mc.mediaItemCount && toIndex < mc.mediaItemCount) {
-                mc.moveMediaItem(fromIndex, toIndex)
+        if (controllerHasCurrentQueue) {
+            mediaController?.let { mc ->
+                if (fromIndex < mc.mediaItemCount && toIndex < mc.mediaItemCount) {
+                    mc.moveMediaItem(fromIndex, toIndex)
+                }
             }
         }
         syncQueueMetadataOnly()
@@ -1108,9 +1354,11 @@ class PlaybackController(
             else -> currentIndex
         }
 
-        mediaController?.let { mc ->
-            if (index < mc.mediaItemCount) {
-                mc.removeMediaItem(index)
+        if (controllerHasCurrentQueue) {
+            mediaController?.let { mc ->
+                if (index < mc.mediaItemCount) {
+                    mc.removeMediaItem(index)
+                }
             }
         }
         syncQueueMetadataOnly()
@@ -1124,9 +1372,11 @@ class PlaybackController(
         val currentTrack = currentQueue[currentIndex]
         currentQueue = currentQueue.take(keepCount)
         originalQueue = listOf(currentTrack)
-        mediaController?.let { mc ->
-            if (mc.mediaItemCount > keepCount) {
-                mc.removeMediaItems(keepCount, mc.mediaItemCount)
+        if (controllerHasCurrentQueue) {
+            mediaController?.let { mc ->
+                if (mc.mediaItemCount > keepCount) {
+                    mc.removeMediaItems(keepCount, mc.mediaItemCount)
+                }
             }
         }
         syncQueueMetadataOnly()
@@ -1141,7 +1391,9 @@ class PlaybackController(
         }
         currentQueue = currentQueue + effectiveTracks
         originalQueue = originalQueue + effectiveTracks
-        mediaController?.addMediaItems(effectiveTracks.map(::buildMediaItem))
+        if (controllerHasCurrentQueue) {
+            mediaController?.addMediaItems(effectiveTracks.map(::buildMediaItem))
+        }
         syncQueueMetadataOnly()
     }
 
@@ -1362,7 +1614,12 @@ class PlaybackController(
         positionJob = scope.launch {
             while (isActive) {
                 val controller = mediaController
-                if (controller != null && controller.isPlaying && !isResolvingActiveTrack) {
+                if (controller != null &&
+                    controller.isPlaying &&
+                    !isResolvingActiveTrack &&
+                    controllerHasCurrentQueue &&
+                    currentQueue.getOrNull(currentIndex)?.isVideoOnly != true
+                ) {
                     tickListenAccumulator()
                     val pos = controller.currentPosition.coerceAtLeast(0L)
                     val track = currentQueue.getOrNull(currentIndex)
@@ -1402,6 +1659,9 @@ class PlaybackController(
 
     private fun syncPlaybackStateFromPlayer() {
         val controller = mediaController ?: return
+        if (!controllerHasCurrentQueue || currentQueue.getOrNull(currentIndex)?.isVideoOnly == true) {
+            return
+        }
         if (!isResolvingActiveTrack) {
             val idx = controller.currentMediaItemIndex
             if (idx in currentQueue.indices) {

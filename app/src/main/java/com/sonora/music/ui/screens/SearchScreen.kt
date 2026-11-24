@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
@@ -34,12 +35,16 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Podcasts
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,6 +67,7 @@ import com.sonora.music.model.SearchCategory
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
+import com.sonora.music.ui.components.MusicVideoCard
 import com.sonora.music.ui.components.ShimmerRowPlaceholder
 import com.sonora.music.ui.components.SonoraArtwork
 import com.sonora.music.ui.components.SonoraPillChip
@@ -84,6 +90,8 @@ private data class BrowseTileSpec(
 )
 
 private val BrowseTiles = listOf(
+    BrowseTileSpec("Music Videos", "Esremborak Mariah Deborah The Weeknd", SearchCategory.VIDEOS, Color(0xFF91273A)),
+    BrowseTileSpec("Wish 107.5", "Wish 107.5", SearchCategory.VIDEOS, Color(0xFF28537A)),
     BrowseTileSpec("Top PH", "OPM hits", SearchCategory.SONGS, Color(0xFF1E6B45)),
     BrowseTileSpec("OPM", "Cup of Joe BINI Dionela", SearchCategory.SONGS, Color(0xFF9E4234)),
     BrowseTileSpec("P-Pop", "BINI SB19", SearchCategory.SONGS, Color(0xFF2D5982)),
@@ -97,6 +105,23 @@ private val BrowseTiles = listOf(
     BrowseTileSpec("PH Podcasts", "philippines", SearchCategory.PODCASTS, Color(0xFF23565E)),
     BrowseTileSpec("PH Radio", "manila", SearchCategory.RADIO, Color(0xFF523E5C))
 )
+
+private fun looksLikeYouTubeQuery(query: String): Boolean {
+    val trimmed = query.trim()
+    val lower = trimmed.lowercase()
+    if (trimmed.isEmpty()) return false
+    if (lower.contains("youtube.com") ||
+        lower.contains("youtu.be") ||
+        lower.contains("music.youtube.com") ||
+        lower.startsWith("http://") ||
+        lower.startsWith("https://")
+    ) {
+        return true
+    }
+    if (Regex("^[a-zA-Z0-9_-]{11}$").matches(trimmed)) return true
+    if (Regex("^pl[a-z0-9_-]{10,}$").matches(lower)) return true
+    return false
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -242,69 +267,112 @@ fun SearchScreen(
             }
         }
 
+        val browseVideos = remember(state.home.musicVideos) {
+            state.home.musicVideos.distinctBy { it.id }
+        }
+        val searchVideos = remember(search.musicVideos) {
+            search.musicVideos.distinctBy { it.id }
+        }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 8.dp, bottom = 148.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             if (search.query.isBlank()) {
-                // Recent Searches
-                if (search.recentSearches.isNotEmpty()) {
-                    item(key = "recent_searches") {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            SonoraSectionHeader(title = "Recent searches")
-                            Spacer(modifier = Modifier.height(10.dp))
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                if (search.category == SearchCategory.VIDEOS) {
+                    item(key = "videos_browse_import_banner") {
+                        YouTubeSearchImportBanner(
+                            query = "",
+                            isUrlMatch = false,
+                            onImportDirect = { actions.onOpenImportYouTube() },
+                            onOpenDialog = { actions.onOpenImportYouTube() },
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                    if (browseVideos.isNotEmpty()) {
+                        item(key = "videos_browse_header") {
+                            SonoraSectionHeader(
+                                title = "Official Music Videos",
+                                subtitle = "PH & Global • Tap to watch in-app",
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                        items(browseVideos, key = { "browse_mv_${it.id}" }) { video ->
+                            val isCurrent = state.playback.currentTrack?.id == video.id
+                            MusicVideoCard(
+                                track = video,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && state.playback.isPlaying,
+                                isLiked = video.id in state.likedTrackIds,
+                                onClick = { actions.onPlayMusicVideo(video, browseVideos) },
+                                onLikeClick = { actions.toggleLike(video) },
+                                onMoreClick = { onTrackOverflow(video) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                        }
+                    }
+                } else {
+                    // Recent Searches
+                    if (search.recentSearches.isNotEmpty()) {
+                        item(key = "recent_searches") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
                             ) {
-                                search.recentSearches.forEach { term ->
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = ObsidianCard,
-                                        modifier = Modifier.sonoraPressable(shape = CircleShape) {
-                                            actions.applyRecentSearch(term)
-                                        }
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(
-                                                start = 12.dp,
-                                                end = 6.dp,
-                                                top = 6.dp,
-                                                bottom = 6.dp
-                                            ),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                SonoraSectionHeader(title = "Recent searches")
+                                Spacer(modifier = Modifier.height(10.dp))
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    search.recentSearches.forEach { term ->
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = ObsidianCard,
+                                            modifier = Modifier.sonoraPressable(shape = CircleShape) {
+                                                actions.applyRecentSearch(term)
+                                            }
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.History,
-                                                contentDescription = null,
-                                                tint = TextMuted,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = term,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = TextPrimary,
-                                                maxLines = 1
-                                            )
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(20.dp)
-                                                    .clip(CircleShape)
-                                                    .clickable { actions.removeRecentSearch(term) },
-                                                contentAlignment = Alignment.Center
+                                            Row(
+                                                modifier = Modifier.padding(
+                                                    start = 12.dp,
+                                                    end = 6.dp,
+                                                    top = 6.dp,
+                                                    bottom = 6.dp
+                                                ),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
                                                 Icon(
-                                                    imageVector = Icons.Rounded.Close,
-                                                    contentDescription = "Remove",
+                                                    imageVector = Icons.Rounded.History,
+                                                    contentDescription = null,
                                                     tint = TextMuted,
-                                                    modifier = Modifier.size(13.dp)
+                                                    modifier = Modifier.size(14.dp)
                                                 )
+                                                Text(
+                                                    text = term,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                    color = TextPrimary,
+                                                    maxLines = 1
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(20.dp)
+                                                        .clip(CircleShape)
+                                                        .clickable { actions.removeRecentSearch(term) },
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Close,
+                                                        contentDescription = "Remove",
+                                                        tint = TextMuted,
+                                                        modifier = Modifier.size(13.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -312,35 +380,35 @@ fun SearchScreen(
                             }
                         }
                     }
-                }
 
-                // 2-Column Flat Color-Blocked Browse Tiles
-                item(key = "browse_all") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                    ) {
-                        SonoraSectionHeader(title = "Browse all")
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            BrowseTiles.chunked(2).forEach { pair ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    pair.forEach { tile ->
-                                        BrowseCategoryTile(
-                                            spec = tile,
-                                            onClick = {
-                                                actions.selectSearchCategory(tile.category)
-                                                actions.applyRecentSearch(tile.query)
-                                            },
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                    if (pair.size == 1) {
-                                        Spacer(modifier = Modifier.weight(1f))
+                    // 2-Column Flat Color-Blocked Browse Tiles
+                    item(key = "browse_all") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            SonoraSectionHeader(title = "Browse all")
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                BrowseTiles.chunked(2).forEach { pair ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        pair.forEach { tile ->
+                                            BrowseCategoryTile(
+                                                spec = tile,
+                                                onClick = {
+                                                    actions.selectSearchCategory(tile.category)
+                                                    actions.applyRecentSearch(tile.query)
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                        if (pair.size == 1) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
                                     }
                                 }
                             }
@@ -348,7 +416,9 @@ fun SearchScreen(
                     }
                 }
             } else {
+                val isYouTubeUrl = looksLikeYouTubeQuery(search.query)
                 val hasAnyForAll = search.songs.isNotEmpty() ||
+                    search.musicVideos.isNotEmpty() ||
                     search.artists.isNotEmpty() ||
                     search.playlists.isNotEmpty() ||
                     search.podcasts.isNotEmpty() ||
@@ -358,11 +428,24 @@ fun SearchScreen(
                 val hasResultsForActive = when (search.category) {
                     SearchCategory.ALL -> hasAnyForAll
                     SearchCategory.SONGS -> search.songs.isNotEmpty()
+                    SearchCategory.VIDEOS -> search.musicVideos.isNotEmpty()
                     SearchCategory.ARTISTS -> search.artists.isNotEmpty()
                     SearchCategory.PLAYLISTS -> search.playlists.isNotEmpty()
                     SearchCategory.PODCASTS -> search.podcasts.isNotEmpty()
                     SearchCategory.AUDIOBOOKS -> search.audiobooks.isNotEmpty()
                     SearchCategory.RADIO -> search.radioStations.isNotEmpty()
+                }
+
+                if (isYouTubeUrl) {
+                    item(key = "youtube_url_import_banner") {
+                        YouTubeSearchImportBanner(
+                            query = search.query,
+                            isUrlMatch = true,
+                            onImportDirect = { actions.onImportYouTube(search.query.trim()) },
+                            onOpenDialog = { actions.onOpenImportYouTube() },
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
                 }
 
                 if (search.isSearching && !hasResultsForActive) {
@@ -372,12 +455,48 @@ fun SearchScreen(
                         EmptySearchCard(
                             query = search.query,
                             category = search.category,
+                            isUrlMatch = isYouTubeUrl,
                             onResetCategory = { actions.selectSearchCategory(SearchCategory.ALL) },
                             onOpenMoodMix = { actions.openAiGenerator(search.query) },
+                            onImportYouTube = {
+                                if (isYouTubeUrl) {
+                                    actions.onImportYouTube(search.query.trim())
+                                } else {
+                                    actions.onOpenImportYouTube()
+                                }
+                            },
                             modifier = Modifier.padding(horizontal = 16.dp)
                         )
                     }
                 } else {
+                    // Music Videos (dedicated tab or carousel inside All)
+                    if (search.category == SearchCategory.VIDEOS && searchVideos.isNotEmpty()) {
+                        item(key = "search_videos_header") {
+                            SonoraSectionHeader(
+                                title = "Music Videos",
+                                subtitle = "${searchVideos.size} results",
+                                actionLabel = "+ Import",
+                                onActionClick = { actions.onOpenImportYouTube() },
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                        items(searchVideos, key = { "search_mv_full_${it.id}" }) { video ->
+                            val isCurrent = state.playback.currentTrack?.id == video.id
+                            MusicVideoCard(
+                                track = video,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && state.playback.isPlaying,
+                                isLiked = video.id in state.likedTrackIds,
+                                onClick = { actions.onPlayMusicVideo(video, searchVideos) },
+                                onLikeClick = { actions.toggleLike(video) },
+                                onMoreClick = { onTrackOverflow(video) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                        }
+                    }
+
                     // Songs
                     if ((search.category == SearchCategory.ALL || search.category == SearchCategory.SONGS) &&
                         search.songs.isNotEmpty()
@@ -414,6 +533,39 @@ fun SearchScreen(
                                 },
                                 onMoreClick = { onTrackOverflow(track) }
                             )
+                        }
+                    }
+
+                    // Music Videos shelf inside SearchCategory.ALL
+                    if (search.category == SearchCategory.ALL && searchVideos.isNotEmpty()) {
+                        item(key = "search_all_videos_section") {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                SonoraSectionHeader(
+                                    title = "Music Videos",
+                                    actionLabel = if (searchVideos.size > 4) "See all" else null,
+                                    onActionClick = { actions.selectSearchCategory(SearchCategory.VIDEOS) },
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(searchVideos.take(10), key = { "search_mv_card_${it.id}" }) { video ->
+                                        val isCurrent = state.playback.currentTrack?.id == video.id
+                                        MusicVideoCard(
+                                            track = video,
+                                            isCurrent = isCurrent,
+                                            isPlaying = isCurrent && state.playback.isPlaying,
+                                            isLiked = video.id in state.likedTrackIds,
+                                            onClick = { actions.onPlayMusicVideo(video, searchVideos) },
+                                            onLikeClick = { actions.toggleLike(video) },
+                                            onMoreClick = { onTrackOverflow(video) },
+                                            modifier = Modifier.width(244.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -579,11 +731,13 @@ private fun BrowseCategoryTile(
     modifier: Modifier = Modifier
 ) {
     val tileIcon = when (spec.category) {
+        SearchCategory.VIDEOS -> Icons.Rounded.SmartDisplay
         SearchCategory.PODCASTS -> Icons.Rounded.Podcasts
         SearchCategory.RADIO -> Icons.Rounded.Radio
         else -> Icons.Rounded.LibraryMusic
     }
     val tileTag = when (spec.category) {
+        SearchCategory.VIDEOS -> "Music Videos"
         SearchCategory.PODCASTS -> "Podcasts"
         SearchCategory.RADIO -> "Live Radio"
         else -> "Full Songs"
@@ -873,11 +1027,99 @@ private fun SearchAudiobookRow(
 }
 
 @Composable
+private fun YouTubeSearchImportBanner(
+    query: String,
+    isUrlMatch: Boolean,
+    onImportDirect: () -> Unit,
+    onOpenDialog: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF211A1D),
+        border = BorderStroke(1.dp, Color(0xFFFF4E45).copy(alpha = 0.4f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .sonoraPressable(
+                shape = RoundedCornerShape(14.dp),
+                onClick = if (isUrlMatch) onImportDirect else onOpenDialog
+            )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFFF4E45).copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SmartDisplay,
+                    contentDescription = null,
+                    tint = Color(0xFFFF4E45),
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Import from YouTube",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (isUrlMatch) {
+                        "Tap to import & watch \"$query\""
+                    } else {
+                        "Paste any MV link, playlist, or load Wish 107.5 feeds"
+                    },
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Button(
+                onClick = if (isUrlMatch) onImportDirect else onOpenDialog,
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = EmeraldAccent,
+                    contentColor = Color.Black
+                ),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(
+                    text = if (isUrlMatch) "Import" else "Open",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun EmptySearchCard(
     query: String,
     category: SearchCategory,
+    isUrlMatch: Boolean,
     onResetCategory: () -> Unit,
     onOpenMoodMix: () -> Unit,
+    onImportYouTube: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -900,17 +1142,31 @@ private fun EmptySearchCard(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Try checking your spelling or searching across All.",
+                text = if (isUrlMatch) {
+                    "YouTube URL detected — tap below to import directly into Sonora."
+                } else {
+                    "Try checking your spelling, searching across All, or importing from YouTube."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SonoraPillChip(
+                    label = "Import from YouTube",
+                    selected = isUrlMatch,
+                    accentColor = EmeraldAccent,
+                    leadingIcon = Icons.Rounded.SmartDisplay,
+                    onClick = onImportYouTube
+                )
                 if (category != SearchCategory.ALL) {
                     SonoraPillChip(
                         label = "Search All",
-                        selected = true,
+                        selected = !isUrlMatch,
                         accentColor = EmeraldAccent,
                         onClick = onResetCategory
                     )

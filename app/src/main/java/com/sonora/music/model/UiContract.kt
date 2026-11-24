@@ -5,11 +5,12 @@ import androidx.compose.ui.graphics.Color
 enum class SearchCategory(val label: String) {
     ALL("All"),
     SONGS("Songs"),
+    VIDEOS("Videos"),
     ARTISTS("Artists"),
     PLAYLISTS("Playlists"),
     PODCASTS("Podcasts"),
     AUDIOBOOKS("Audiobooks"),
-    RADIO("Live Radio")
+    RADIO("Radio")
 }
 
 data class HomeFeedState(
@@ -31,7 +32,8 @@ data class HomeFeedState(
     val audiobooks: List<Audiobook> = emptyList(),
     val liveRadio: List<Track> = emptyList(),
     val recentlyPlayed: List<Track> = emptyList(),
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val musicVideos: List<Track> = emptyList()
 )
 
 data class SearchState(
@@ -47,7 +49,8 @@ data class SearchState(
     val radioStations: List<Track> = emptyList(),
     val aiPrompt: String = "",
     val isGeneratingAiPlaylist: Boolean = false,
-    val generatedAiPlaylist: Playlist? = null
+    val generatedAiPlaylist: Playlist? = null,
+    val musicVideos: List<Track> = emptyList()
 )
 
 data class LibraryState(
@@ -92,7 +95,11 @@ data class SonoraUiState(
     val isAudioStudioOpen: Boolean = false,
     val isWrappedOpen: Boolean = false,
     val isAiGeneratorOpen: Boolean = false,
-    val snackbarMessage: String? = null
+    val snackbarMessage: String? = null,
+    val isVideoMode: Boolean = false,
+    val isImportYouTubeOpen: Boolean = false,
+    val isImportingYouTube: Boolean = false,
+    val youtubeImportError: String? = null
 ) {
     val likedTrackIds: Set<String>
         get() = library.likedSongs.mapTo(HashSet()) { it.id }
@@ -172,4 +179,11 @@ interface SonoraActions {
     fun loadMoreGenre(genre: String)
     fun refreshHome()
     fun dismissSnackbar()
+
+    fun onSetVideoMode(enabled: Boolean) {}
+    fun onPlayMusicVideo(track: Track, queue: List<Track> = listOf(track)) {}
+    fun onOpenImportYouTube() {}
+    fun onCloseImportYouTube() {}
+    fun onImportYouTube(query: String) {}
+    fun onImportYouTubePack(packId: String) {}
 }

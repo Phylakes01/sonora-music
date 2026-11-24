@@ -4,6 +4,7 @@ enum class TrackSource(val badgeLabel: String) {
     AUDIUS("STREAM"),
     DEEZER("CATALOG"),
     ITUNES("CATALOG"),
+    YOUTUBE("VIDEO"),
     PODCAST("PODCAST"),
     AUDIOBOOK("AUDIOBOOK"),
     RADIO("LIVE"),
@@ -29,10 +30,25 @@ data class Track(
     val playCount: Long = 0L,
     val localUri: String? = null,
     val externalUrl: String = "",
-    val isPreviewOnly: Boolean = false
+    val isPreviewOnly: Boolean = false,
+    val youtubeVideoId: String = "",
+    val hasMusicVideo: Boolean = false
 ) {
     val displayArtist: String
         get() = artist.ifBlank { "Featured Artist" }
+
+    val isVideoOnly: Boolean
+        get() = streamUrl.isBlank() && youtubeVideoId.isNotBlank()
+
+    val effectiveYoutubeUrl: String
+        get() = if (youtubeVideoId.isNotBlank()) {
+            "https://www.youtube.com/watch?v=$youtubeVideoId"
+        } else {
+            externalUrl
+        }
+
+    val durationMs: Long
+        get() = if (isLive || durationSec <= 0) 0L else durationSec * 1000L
 
     val formattedDuration: String
         get() {

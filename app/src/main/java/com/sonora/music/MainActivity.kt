@@ -48,7 +48,9 @@ class MainActivity : ComponentActivity() {
         }
 
         requestNotificationsPermissionIfNeeded()
-        viewModel.handleDeepLink(intent)
+        if (savedInstanceState == null) {
+            viewModel.handleDeepLink(intent)
+        }
 
         setContent {
             SonoraApp(viewModel = viewModel)

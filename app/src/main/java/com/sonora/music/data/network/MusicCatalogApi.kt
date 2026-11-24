@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong
 class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.client) {
 
     private val fullAudioResolver = FullAudioResolver(client)
+    val youTubeApi = YouTubeCatalogApi(client)
     private val deezerSemaphore = Semaphore(4)
     private val rateLimitedUntilMs = AtomicLong(0L)
 
@@ -169,15 +171,76 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
 
     suspend fun getPhTrendingArtists(): List<Artist> = withContext(Dispatchers.IO) {
         cachedArtists("ph_artists") {
-            refreshCuratedArtists(CURATED_PH_ARTISTS)
+            RegionalContentFilter.filterArtists(refreshCuratedArtists(CURATED_PH_ARTISTS))
         }
     }
 
     suspend fun getGlobalTrendingArtists(): List<Artist> = withContext(Dispatchers.IO) {
         cachedArtists("global_artists") {
-            refreshCuratedArtists(CURATED_GLOBAL_ARTISTS)
+            RegionalContentFilter.filterArtists(refreshCuratedArtists(CURATED_GLOBAL_ARTISTS))
         }
     }
+
+    fun getInstantPhTracks(limit: Int = 40): List<Track> = finalizeFullTrackList(
+        PH_SEED_TRACKS.map { seed ->
+            buildSeedTrack(seed, seedArtworkCache[seed.audiusId] ?: lookupMetaByTitleArtist(seed.title, seed.artist))
+        },
+        limit
+    )
+
+    fun getInstantOpmTracks(limit: Int = 35): List<Track> = finalizeFullTrackList(
+        PH_SEED_TRACKS.map { seed ->
+            buildSeedTrack(seed, seedArtworkCache[seed.audiusId] ?: lookupMetaByTitleArtist(seed.title, seed.artist))
+        },
+        limit
+    )
+
+    fun getInstantGlobalTracks(limit: Int = 40): List<Track> = finalizeFullTrackList(
+        GLOBAL_SEED_TRACKS.map { seed ->
+            buildSeedTrack(seed, seedArtworkCache[seed.audiusId] ?: lookupMetaByTitleArtist(seed.title, seed.artist))
+        },
+        limit
+    )
+
+    fun getInstantPhArtists(): List<Artist> =
+        RegionalContentFilter.filterArtists(CURATED_PH_ARTISTS.map { it.toArtist() })
+
+    fun getInstantGlobalArtists(): List<Artist> =
+        RegionalContentFilter.filterArtists(CURATED_GLOBAL_ARTISTS.map { it.toArtist() })
+
+    fun getInstantMusicVideos(): List<Track> {
+        val all = youTubeApi.getCuratedMusicVideos()
+        val ph = all.filter { it.genre.contains("OPM", true) || it.genre.contains("P-Pop", true) }
+        val global = all.filterNot { it in ph }
+        return RegionalContentFilter.filterTracks(interleaveTrackLists(ph, global))
+    }
+
+    suspend fun getPhMusicVideos(): List<Track> = youTubeApi.getPhMusicVideos()
+
+    suspend fun getGlobalMusicVideos(): List<Track> = youTubeApi.getGlobalMusicVideos()
+
+    suspend fun getCombinedMusicVideos(): List<Track> = withContext(Dispatchers.IO) {
+        coroutineScope {
+            val phDef = async { getPhMusicVideos() }
+            val globalDef = async { getGlobalMusicVideos() }
+            val merged = interleaveTrackLists(phDef.await(), globalDef.await())
+            val seenVideoIds = HashSet<String>(merged.size)
+            val deduped = merged.filter { track ->
+                val key = track.youtubeVideoId.ifBlank { track.id }
+                seenVideoIds.add(key)
+            }
+            RegionalContentFilter.filterTracks(deduped)
+        }
+    }
+
+    fun getYouTubePacks(): List<YouTubePack> = youTubeApi.getCuratedPacks()
+
+    fun getYouTubePackTracks(packId: String): List<Track> = youTubeApi.getPackTracks(packId)
+
+    suspend fun importFromYouTube(input: String): YouTubeImportResult =
+        youTubeApi.importFromUrlOrQuery(input)
+
+    suspend fun searchVideos(query: String): List<Track> = youTubeApi.searchVideos(query)
 
     suspend fun getGenreTracks(genre: String, limit: Int = 30): List<Track> = withContext(Dispatchers.IO) {
         val cleanGenre = genre.trim()
@@ -514,7 +577,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                         parseDeezerArtist(obj)?.let(::add)
                     }
                 }
-                if (parsed.isNotEmpty()) return@withContext parsed
+                val filtered = RegionalContentFilter.filterArtists(parsed)
+                if (filtered.isNotEmpty()) return@withContext filtered
             }
         }
         val curatedPool = if (CURATED_GLOBAL_ARTISTS.any { it.id == cleanId }) {
@@ -522,21 +586,27 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         } else {
             CURATED_PH_ARTISTS
         }
-        curatedPool.filterNot { it.id == cleanId }.take(10).map { it.toArtist() }
+        RegionalContentFilter.filterArtists(
+            curatedPool.filterNot { it.id == cleanId }.take(10).map { it.toArtist() }
+        )
     }
 
     suspend fun searchTracks(query: String, limit: Int = 30): List<Track> = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return@withContext emptyList()
+        if (RegionalContentFilter.isExcludedIndianContent(title = trimmed, artist = trimmed)) {
+            return@withContext emptyList()
+        }
         val safeLimit = limit.coerceIn(1, 50)
+        val effectiveQuery = expandSearchAlias(trimmed)
 
         coroutineScope {
-            val matchingSeeds = findMatchingCuratedSeeds(trimmed)
+            val matchingSeeds = findMatchingCuratedSeeds(effectiveQuery)
             val seedMetaDef = async {
                 if (matchingSeeds.isNotEmpty()) fetchAudiusSeedMetadata(matchingSeeds) else emptyMap()
             }
             val audiusSearchDef = async {
-                searchAudiusFullTracks(trimmed, limit = safeLimit.coerceAtLeast(25), defaultGenre = "Music")
+                searchAudiusFullTracks(effectiveQuery, limit = safeLimit.coerceAtLeast(25), defaultGenre = "Music")
             }
 
             val seedMeta = seedMetaDef.await()
@@ -549,8 +619,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
 
             val curatedIds = hydratedSeeds.mapTo(HashSet()) { it.id }
             val curatedStreams = hydratedSeeds.mapTo(HashSet()) { it.streamUrl }
-            val queryNorm = normalizeText(trimmed)
-            val queryTokens = tokenizeWords(trimmed)
+            val queryNorm = normalizeText(effectiveQuery)
+            val queryTokens = tokenizeWords(effectiveQuery)
             val queryWantsNoise = NOISE_SEARCH_REGEXES.any { it.containsMatchIn(queryNorm) }
 
             val combined = deduplicateTracks(hydratedSeeds + audiusHits)
@@ -575,10 +645,14 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     suspend fun searchArtists(query: String, limit: Int = 15): List<Artist> = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return@withContext emptyList()
+        if (RegionalContentFilter.isExcludedIndianContent(title = "", artist = trimmed)) {
+            return@withContext emptyList()
+        }
         val safeLimit = limit.coerceIn(1, 50)
         val fetchLimit = (safeLimit * 2).coerceIn(15, 50)
+        val effectiveQuery = expandSearchAlias(trimmed)
 
-        val root = fetchDeezerJson("/search/artist?q=${encodeUrlParam(trimmed)}&limit=$fetchLimit")
+        val root = fetchDeezerJson("/search/artist?q=${encodeUrlParam(effectiveQuery)}&limit=$fetchLimit")
         val data = root?.optJSONArray("data")
         if (data != null) {
             val parsed = buildList {
@@ -587,18 +661,21 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     parseDeezerArtist(obj)?.let(::add)
                 }
             }
-            if (parsed.isNotEmpty()) {
-                return@withContext parsed
+            val filtered = RegionalContentFilter.filterArtists(parsed)
+            if (filtered.isNotEmpty()) {
+                return@withContext filtered
                     .sortedByDescending { it.followerCount }
                     .take(safeLimit)
             }
         }
 
-        (CURATED_PH_ARTISTS + CURATED_GLOBAL_ARTISTS)
-            .filter { it.name.contains(trimmed, ignoreCase = true) }
-            .sortedByDescending { it.followerCount }
-            .take(safeLimit)
-            .map { it.toArtist() }
+        RegionalContentFilter.filterArtists(
+            (CURATED_PH_ARTISTS + CURATED_GLOBAL_ARTISTS)
+                .filter { it.name.contains(effectiveQuery, ignoreCase = true) }
+                .sortedByDescending { it.followerCount }
+                .take(safeLimit)
+                .map { it.toArtist() }
+        )
     }
 
     suspend fun searchPlaylists(query: String, limit: Int = 15): List<Playlist> = withContext(Dispatchers.IO) {
@@ -633,11 +710,19 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     suspend fun resolvePlayableTrack(track: Track): Track {
+        if (RegionalContentFilter.isExcludedTrack(track)) {
+            return track.copy(streamUrl = "", isPreviewOnly = false)
+        }
+
         if (!track.localUri.isNullOrBlank() ||
             track.isLive ||
             track.source in ALWAYS_BYPASS_SOURCES
         ) {
-            return track
+            return if (FullAudioResolver.isPreviewAudioUrl(track.streamUrl) || track.isPreviewOnly) {
+                track.copy(streamUrl = "", isPreviewOnly = false)
+            } else {
+                track
+            }
         }
 
         if (track.source == TrackSource.AUDIUS &&
@@ -690,13 +775,18 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     async {
                         val resolved = fullAudioResolver.resolveFullTrackOrNull(candidate) ?: return@async null
                         if (!isValidFullAudioTrack(resolved)) return@async null
+                        val ytId = resolved.youtubeVideoId.ifBlank {
+                            youTubeApi.findMatchingVerifiedVideoId(resolved.title, resolved.artist).orEmpty()
+                        }
                         resolved.copy(
                             artworkUrl = resolved.artworkUrl ?: candidate.artworkUrl,
                             artworkMirrors = resolved.artworkMirrors.ifEmpty { candidate.artworkMirrors },
                             album = resolved.album.ifBlank { candidate.album },
                             releaseDate = resolved.releaseDate.ifBlank { candidate.releaseDate },
                             playCount = maxOf(resolved.playCount, candidate.playCount),
-                            isPreviewOnly = false
+                            isPreviewOnly = false,
+                            youtubeVideoId = ytId,
+                            hasMusicVideo = resolved.hasMusicVideo || ytId.isNotBlank()
                         )
                     }
                 }.awaitAll().filterNotNull()
@@ -713,6 +803,9 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         entries.chunked(2).flatMap { chunk ->
             chunk.map { entry ->
                 async {
+                    if (RegionalContentFilter.isExcludedIndianContent(entry.title, entry.artist, genre = defaultGenre)) {
+                        return@async null
+                    }
                     val matchedSeed = matchCuratedSeed(entry.title, entry.artist)
                     if (matchedSeed != null) {
                         return@async hydrateSeeds(listOf(matchedSeed)).firstOrNull()
@@ -731,11 +824,16 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     if (!isValidFullAudioTrack(resolved)) return@async null
                     val artMeta = trackMetaByKeyCache[normalizedTrackKey(entry.title, entry.artist)]
                         ?: fetchArtworkMetadataFromItunes(entry.title, entry.artist)
+                    val ytId = resolved.youtubeVideoId.ifBlank {
+                        youTubeApi.findMatchingVerifiedVideoId(resolved.title, resolved.artist).orEmpty()
+                    }
                     resolved.copy(
                         artworkUrl = resolved.artworkUrl ?: artMeta?.artworkUrl,
                         artworkMirrors = resolved.artworkMirrors.ifEmpty { artMeta?.artworkMirrors.orEmpty() },
                         album = resolved.album.ifBlank { artMeta?.album.orEmpty() },
-                        isPreviewOnly = false
+                        isPreviewOnly = false,
+                        youtubeVideoId = ytId,
+                        hasMusicVideo = resolved.hasMusicVideo || ytId.isNotBlank()
                     )
                 }
             }.awaitAll().filterNotNull()
@@ -764,25 +862,28 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         if (unresolvedSeeds.isNotEmpty()) {
             val audiusMeta = audiusBatchMeta ?: fetchAudiusSeedMetadata(unresolvedSeeds)
 
-            unresolvedSeeds.take(24).chunked(4).forEach { chunk ->
-                chunk.map { seed ->
-                    async {
-                        val officialMeta = fetchArtworkForSeedFromSearch(seed)
-                        val audFallback = audiusMeta[seed.audiusId]
-                        val merged = mergeHydratedMeta(officialMeta, audFallback)
-                        if (merged != null && !merged.artworkUrl.isNullOrBlank()) {
-                            seedArtworkCache[seed.audiusId] = merged
-                        }
-                    }
-                }.awaitAll()
+            for (seed in unresolvedSeeds) {
+                val audFallback = audiusMeta[seed.audiusId]
+                if (audFallback != null && !audFallback.artworkUrl.isNullOrBlank()) {
+                    seedArtworkCache[seed.audiusId] = audFallback
+                }
             }
 
-            for (seed in unresolvedSeeds) {
-                if (seedArtworkCache[seed.audiusId] == null) {
-                    val audFallback = audiusMeta[seed.audiusId]
-                    if (audFallback != null && !audFallback.artworkUrl.isNullOrBlank()) {
-                        seedArtworkCache[seed.audiusId] = audFallback
-                    }
+            val stillMissing = unresolvedSeeds.filter { seed ->
+                seedArtworkCache[seed.audiusId] == null &&
+                    ARTIST_PORTRAIT_BY_ID[seed.artistId].isNullOrBlank()
+            }.take(10)
+
+            if (stillMissing.isNotEmpty()) {
+                withTimeoutOrNull(3_500L) {
+                    stillMissing.map { seed ->
+                        async {
+                            val officialMeta = fetchArtworkForSeedFromSearch(seed)
+                            if (officialMeta != null && !officialMeta.artworkUrl.isNullOrBlank()) {
+                                seedArtworkCache[seed.audiusId] = officialMeta
+                            }
+                        }
+                    }.awaitAll()
                 }
             }
         }
@@ -796,8 +897,10 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     private fun buildSeedTrack(seed: SeedTrack, meta: HydratedMeta?): Track {
+        val ytId = seed.youtubeVideoId
         val artworkUrl = meta?.artworkUrl?.takeIf { it.isNotBlank() }
             ?: ARTIST_PORTRAIT_BY_ID[seed.artistId]
+            ?: ytId.takeIf { it.isNotBlank() }?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
         return Track(
             id = "$AUDIUS_TRACK_ID_PREFIX${seed.audiusId}",
             title = seed.title,
@@ -816,40 +919,44 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             releaseDate = meta?.releaseDate.orEmpty(),
             playCount = meta?.playCount ?: 0L,
             externalUrl = "https://audius.co/tracks/${seed.audiusId}",
-            isPreviewOnly = false
+            isPreviewOnly = false,
+            youtubeVideoId = ytId,
+            hasMusicVideo = ytId.isNotBlank()
         )
     }
 
     private suspend fun fetchAudiusSeedMetadata(seeds: List<SeedTrack>): Map<String, HydratedMeta> {
         if (seeds.isEmpty()) return emptyMap()
-        val idParams = seeds.joinToString("&") { "id=${encodeUrlParam(it.audiusId)}" }
-        val pathAndQuery = "/v1/tracks?app_name=$AUDIUS_APP_NAME&$idParams"
-        for (host in AUDIUS_HOSTS) {
-            val body = client.getText("$host$pathAndQuery") ?: continue
-            val data = try {
-                JSONObject(body).optJSONArray("data")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                null
-            } ?: continue
+        val combined = HashMap<String, HydratedMeta>(seeds.size)
+        for (chunk in seeds.chunked(25)) {
+            val idParams = chunk.joinToString("&") { "id=${encodeUrlParam(it.audiusId)}" }
+            val pathAndQuery = "/v1/tracks?app_name=$AUDIUS_APP_NAME&$idParams"
+            for (host in AUDIUS_HOSTS) {
+                val body = client.getText("$host$pathAndQuery") ?: continue
+                val data = try {
+                    JSONObject(body).optJSONArray("data")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    null
+                } ?: continue
 
-            val result = HashMap<String, HydratedMeta>(data.length())
-            for (i in 0 until data.length()) {
-                val obj = data.optJSONObject(i) ?: continue
-                val id = obj.optCleanString("id")
-                if (id.isEmpty()) continue
-                val (artworkUrl, mirrors) = extractAudiusArtwork(obj.optJSONObject("artwork"))
-                result[id] = HydratedMeta(
-                    artworkUrl = artworkUrl,
-                    artworkMirrors = mirrors,
-                    releaseDate = obj.optCleanString("release_date").take(10),
-                    playCount = obj.optLong("play_count", 0L).coerceAtLeast(0L)
-                )
+                for (i in 0 until data.length()) {
+                    val obj = data.optJSONObject(i) ?: continue
+                    val id = obj.optCleanString("id")
+                    if (id.isEmpty()) continue
+                    val (artworkUrl, mirrors) = extractAudiusArtwork(obj.optJSONObject("artwork"))
+                    combined[id] = HydratedMeta(
+                        artworkUrl = artworkUrl,
+                        artworkMirrors = mirrors,
+                        releaseDate = obj.optCleanString("release_date").take(10),
+                        playCount = obj.optLong("play_count", 0L).coerceAtLeast(0L)
+                    )
+                }
+                break
             }
-            return result
         }
-        return emptyMap()
+        return combined
     }
 
     private suspend fun fetchArtworkForSeedFromSearch(seed: SeedTrack): HydratedMeta? {
@@ -1054,9 +1161,22 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             ?.ifBlank { userObj.optCleanString("handle") }
             .orEmpty()
         val artistId = userObj?.optCleanString("id").orEmpty()
+        val genre = obj.optCleanString("genre").ifBlank { defaultGenre }.ifBlank { "Music" }
+        val mood = obj.optCleanString("mood")
         val (rawArtworkUrl, mirrors) = extractAudiusArtwork(obj.optJSONObject("artwork"))
         val cachedMeta = lookupMetaByTitleArtist(title, artistName)
+        if (RegionalContentFilter.isExcludedIndianContent(
+                title = title,
+                artist = artistName,
+                album = cachedMeta?.album.orEmpty(),
+                genre = genre,
+                extra = mood
+            )
+        ) {
+            return null
+        }
         val artworkUrl = rawArtworkUrl ?: cachedMeta?.artworkUrl
+        val ytId = youTubeApi.findMatchingVerifiedVideoId(title, artistName).orEmpty()
 
         return Track(
             id = "$AUDIUS_TRACK_ID_PREFIX$id",
@@ -1064,8 +1184,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             artist = artistName,
             artistId = artistId,
             album = cachedMeta?.album.orEmpty(),
-            genre = obj.optCleanString("genre").ifBlank { defaultGenre }.ifBlank { "Music" },
-            mood = obj.optCleanString("mood"),
+            genre = genre,
+            mood = mood,
             durationSec = durationSec,
             artworkUrl = artworkUrl,
             artworkMirrors = mirrors.ifEmpty { cachedMeta?.artworkMirrors.orEmpty() },
@@ -1076,7 +1196,9 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             releaseDate = obj.optCleanString("release_date").take(10).ifBlank { cachedMeta?.releaseDate.orEmpty() },
             playCount = obj.optLong("play_count", 0L).coerceAtLeast(0L),
             externalUrl = "https://audius.co/tracks/$id",
-            isPreviewOnly = false
+            isPreviewOnly = false,
+            youtubeVideoId = ytId,
+            hasMusicVideo = ytId.isNotBlank()
         )
     }
 
@@ -1148,7 +1270,9 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
                     val item = results.optJSONObject(i) ?: continue
                     val title = item.optCleanString("name")
                     val artist = item.optCleanString("artistName")
-                    if (title.isNotEmpty() && artist.isNotEmpty()) {
+                    if (title.isNotEmpty() && artist.isNotEmpty() &&
+                        !RegionalContentFilter.isExcludedIndianContent(title, artist)
+                    ) {
                         add(AppleChartEntry(title = title, artist = artist))
                     }
                 }
@@ -1223,6 +1347,15 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         val artistName = artistObj?.optCleanString("name").orEmpty()
         val artistId = artistObj?.optCleanString("id").orEmpty()
         val meta = extractDeezerMetadata(obj)
+        if (RegionalContentFilter.isExcludedIndianContent(
+                title = title,
+                artist = artistName,
+                album = meta?.album.orEmpty(),
+                genre = defaultGenre
+            )
+        ) {
+            return null
+        }
         if (meta != null && artistName.isNotEmpty()) {
             cacheMetaForKey(title, artistName, meta)
         }
@@ -1337,18 +1470,30 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     private fun finalizeFullTrackList(tracks: List<Track>, limit: Int): List<Track> {
-        val valid = tracks
+        val valid = RegionalContentFilter.filterTracks(tracks)
             .filter(::isValidFullAudioTrack)
             .map { if (it.isPreviewOnly) it.copy(isPreviewOnly = false) else it }
         return deduplicateTracks(valid).take(limit.coerceAtLeast(1))
     }
 
     private fun isValidFullAudioTrack(track: Track): Boolean {
-        return track.source == TrackSource.AUDIUS &&
+        return !RegionalContentFilter.isExcludedTrack(track) &&
+            track.source == TrackSource.AUDIUS &&
             !track.isPreviewOnly &&
             track.durationSec >= MIN_FULL_DURATION_SEC &&
             track.streamUrl.startsWith("http", ignoreCase = true) &&
             !FullAudioResolver.isPreviewAudioUrl(track.streamUrl)
+    }
+
+    private fun expandSearchAlias(query: String): String {
+        val lower = query.lowercase(Locale.ROOT).trim()
+        return when {
+            lower == "maria deborah" || lower == "maria debora" || lower == "mariadeborah" ->
+                "Mariah Deborah"
+            lower.contains("maria deborah") ->
+                lower.replace("maria deborah", "Mariah Deborah")
+            else -> query
+        }
     }
 
     private fun matchCuratedSeed(title: String, artist: String): SeedTrack? {
@@ -1377,8 +1522,9 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
     }
 
     private fun findMatchingCuratedSeeds(query: String): List<SeedTrack> {
-        val qNorm = normalizeText(query)
-        val qTokens = tokenizeWords(query)
+        val effective = expandSearchAlias(query)
+        val qNorm = normalizeText(effective)
+        val qTokens = tokenizeWords(effective)
         if (qNorm.isEmpty()) return emptyList()
 
         return ALL_SEED_TRACKS.filter { seed ->
@@ -1636,7 +1782,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         val audiusId: String,
         val durationSec: Int,
         val genre: String,
-        val mood: String = ""
+        val mood: String = "",
+        val youtubeVideoId: String = ""
     )
 
     private data class AppleChartEntry(
@@ -1724,7 +1871,8 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
             TrackSource.LOCAL,
             TrackSource.PODCAST,
             TrackSource.AUDIOBOOK,
-            TrackSource.RADIO
+            TrackSource.RADIO,
+            TrackSource.YOUTUBE
         )
 
         private val OPM_SPOTLIGHT_ARTIST_IDS = listOf(
@@ -1766,55 +1914,81 @@ class MusicCatalogApi(private val client: OkHttpClient = HttpClientProvider.clie
         )
 
         private val PH_SEED_TRACKS = listOf(
-            SeedTrack("Multo", "Cup of Joe", "60687062", "jz39y6M", 289, "OPM", "Emotional"),
+            SeedTrack("Multo", "Cup of Joe", "60687062", "jz39y6M", 289, "OPM", "Emotional", "Rht8rS4cR1s"),
             SeedTrack("Tingin", "Cup of Joe, Janine Teñoso", "60687062", "VK6Zql6", 221, "OPM", "Romantic"),
             SeedTrack("Misteryoso", "Cup of Joe", "60687062", "agVv6Po", 223, "OPM", "Dreamy"),
             SeedTrack("Palagi", "TJ Monterde", "7189292", "gb4w8Mv", 240, "OPM", "Romantic"),
             SeedTrack("Dating Tayo", "TJ Monterde", "7189292", "zyM8wXp", 239, "OPM", "Nostalgic"),
             SeedTrack("Mahika", "Adie, Janine Berdin", "242188", "QKAWgZG", 204, "OPM", "Chill"),
             SeedTrack("Paraluman", "Adie", "242188", "Kd8vb0z", 310, "OPM", "Romantic"),
-            SeedTrack("Dilaw", "Maki", "87317692", "92dRdP2", 192, "OPM", "Upbeat"),
+            SeedTrack("Dilaw", "Maki", "87317692", "92dRdP2", 192, "OPM", "Upbeat", "L215z9C4Zd8"),
             SeedTrack("Pasilyo", "SunKissed Lola", "179158087", "gvobVzq", 269, "OPM", "Romantic"),
             SeedTrack("Pagsamo", "Arthur Nery", "55640202", "7O2WQEP", 297, "OPM", "Soulful"),
             SeedTrack("Pelikula", "Janine Teñoso feat. Arthur Nery", "55640202", "80RvP5O", 206, "OPM", "Dreamy"),
-            SeedTrack("Pantropiko", "BINI", "320392011", "xyGXRK9", 264, "P-Pop", "Sunny"),
+            SeedTrack("Pantropiko", "BINI", "320392011", "xyGXRK9", 264, "P-Pop", "Sunny", "Zx31bB2vMns"),
             SeedTrack("Headshot", "Hev Abi", "126789982", "4kq0Zxr", 170, "Pinoy Hip-Hop", "Hype"),
             SeedTrack("Sining", "Dionela ft. Jay R", "69165172", "Y9jpAvW", 192, "R&B", "Smooth"),
-            SeedTrack("Marilag", "Dionela", "69165172", "NvGQZpN", 199, "R&B", "Groovy"),
+            SeedTrack("Marilag", "Dionela", "69165172", "NvGQZpN", 199, "R&B", "Groovy", "bD9whtdq7dw"),
             SeedTrack("Raining in Manila", "Lola Amour", "12450156", "pRraNWG", 336, "Rock", "Feel Good"),
-            SeedTrack("Malaya", "Moira Dela Torre", "6248262", "abPpq5w", 270, "Chill", "Emotional")
+            SeedTrack("Malaya", "Moira Dela Torre", "6248262", "abPpq5w", 270, "Chill", "Emotional"),
+            SeedTrack("Na Para Bang", "Mariah Deborah", "", "oWarYJg", 224, "OPM", "Heartfelt", "Y5z_4utl678"),
+            SeedTrack("Tibok", "Earl Agustin", "", "XBRY4wb", 327, "OPM", "Romantic", "oiAtAzFLDfE"),
+            SeedTrack("Sa Bawat Sandali", "Amiel Sol", "", "91Y6mNa", 304, "OPM", "Romantic"),
+            SeedTrack("Uhaw (Tayong Lahat)", "Dilaw", "", "Y6ayEZp", 238, "OPM", "Rock"),
+            SeedTrack("Ikot", "Over October", "", "5xOOMax", 254, "OPM", "Indie"),
+            SeedTrack("Tulad Mo", "TJ Monterde", "7189292", "9mQdR90", 239, "OPM", "Acoustic"),
+            SeedTrack("Hindi Tayo Pwede", "The Juans", "", "abjq0yQ", 295, "OPM", "Emotional"),
+            SeedTrack("Ikaw Lang", "NOBITA", "", "4jMqqV9", 261, "OPM", "Romantic"),
+            SeedTrack("711", "TONEEJAY", "", "732xGQA", 223, "OPM", "Upbeat"),
+            SeedTrack("Miss Miss", "Rob Deniel", "109893432", "bKQyxay", 266, "OPM", "Retro"),
+            SeedTrack("Kisame", "rhodessa", "", "3vd64ZB", 213, "OPM", "Dreamy"),
+            SeedTrack("Tayo Na Lang Dalawa", "Mayonnaise", "", "lzPK7ww", 187, "OPM", "Upbeat"),
+            SeedTrack("Estranghero", "Cup of Joe", "60687062", "bVEd8VJ", 184, "OPM", "Emotional"),
+            SeedTrack("Kailan", "Maki", "87317692", "o4EWb97", 232, "OPM", "Chill"),
+            SeedTrack("Saan?", "Maki", "87317692", "AKPMMVk", 225, "OPM", "Nostalgic"),
+            SeedTrack("Umaasa", "CALEIN", "", "Rag1G1j", 338, "OPM", "Emotional"),
+            SeedTrack("Magkabilang Mundo", "Jireh Lim", "", "320rRZJ", 238, "OPM", "Acoustic"),
+            SeedTrack("Magbalik", "Callalily", "", "Nv0oBkx", 324, "Throwback OPM", "Nostalgic"),
+            SeedTrack("Para Sa Streets", "Hev Abi", "126789982", "Alwy6ag", 190, "Pinoy Hip-Hop", "Hype"),
+            SeedTrack("Kalimutan Ka", "Skusta Clee", "11321714", "02KPAK9", 321, "Pinoy Hip-Hop", "Emotional"),
+            SeedTrack("Since Day One", "Skusta Clee ft. Flow G", "11321714", "JG2BR3k", 236, "Pinoy Hip-Hop", "Hype"),
+            SeedTrack("Sandali", "mrld", "", "daMZzJ2", 223, "OPM", "Dreamy"),
+            SeedTrack("Pag-Ibig ay Kanibalismo II", "fitterkarma", "", "7lbVX89", 207, "OPM", "Indie"),
+            SeedTrack("Daleng Dale", "GAT", "", "91Km6Xo", 164, "P-Pop", "Upbeat"),
+            SeedTrack("Randomantic", "James Reid", "", "vjVA2zK", 248, "OPM", "Romantic")
         )
 
         private val GLOBAL_SEED_TRACKS = listOf(
-            SeedTrack("Die With A Smile", "Lady Gaga, Bruno Mars", "429675", "ZbZ4zZa", 249, "Pop", "Romantic"),
-            SeedTrack("Starboy", "The Weeknd, Daft Punk", "4050205", "ZPKqbAJ", 273, "R&B", "Hype"),
-            SeedTrack("Birds of a Feather", "Billie Eilish", "9635624", "aW6rqjE", 230, "Pop", "Dreamy"),
-            SeedTrack("Cruel Summer", "Taylor Swift", "12246", "2lp1bg1", 179, "Pop", "Upbeat"),
-            SeedTrack("Not Like Us", "Kendrick Lamar", "525046", "Oo1xMEQ", 273, "Hip-Hop", "Hype"),
-            SeedTrack("Drivers License", "Olivia Rodrigo", "11152580", "d0pMY5P", 247, "Pop", "Emotional"),
-            SeedTrack("Call Out My Name", "The Weeknd", "4050205", "KdmbB", 227, "R&B", "Emotional"),
-            SeedTrack("like JENNIE", "JENNIE", "1228100", "mw9mwr", 190, "K-Pop", "Hype"),
-            SeedTrack("lovely", "Billie Eilish, Khalid", "9635624", "NvQlZ", 200, "Pop", "Emotional"),
+            SeedTrack("Die With A Smile", "Lady Gaga, Bruno Mars", "429675", "ZbZ4zZa", 249, "Pop", "Romantic", "kPa7bsKwL-c"),
+            SeedTrack("Starboy", "The Weeknd, Daft Punk", "4050205", "ZPKqbAJ", 273, "R&B", "Hype", "34Na4j8AVgA"),
+            SeedTrack("Birds of a Feather", "Billie Eilish", "9635624", "aW6rqjE", 230, "Pop", "Dreamy", "V9PVRfjEBTI"),
+            SeedTrack("Cruel Summer", "Taylor Swift", "12246", "2lp1bg1", 179, "Pop", "Upbeat", "ic8j13piAhQ"),
+            SeedTrack("Not Like Us", "Kendrick Lamar", "525046", "Oo1xMEQ", 273, "Hip-Hop", "Hype", "H58vbez_m4E"),
+            SeedTrack("Drivers License", "Olivia Rodrigo", "11152580", "d0pMY5P", 247, "Pop", "Emotional", "ZmDBbnmKpqQ"),
+            SeedTrack("Call Out My Name", "The Weeknd", "4050205", "KdmbB", 227, "R&B", "Emotional", "M4ZoCHID9GI"),
+            SeedTrack("like JENNIE", "JENNIE", "1228100", "mw9mwr", 190, "K-Pop", "Hype", "JSFG-IE8n_c"),
+            SeedTrack("lovely", "Billie Eilish, Khalid", "9635624", "NvQlZ", 200, "Pop", "Emotional", "V1Pl8CzNzCw"),
             SeedTrack("Blank Space", "Taylor Swift", "12246", "KVBWy", 272, "Pop", "Upbeat"),
-            SeedTrack("The Hills", "The Weeknd", "4050205", "4aWNr", 265, "R&B", "Moody"),
-            SeedTrack("Fix You", "Coldplay", "892", "KbjZRxz", 296, "Rock", "Emotional"),
-            SeedTrack("Perfect", "Ed Sheeran", "384236", "8p9MqP", 260, "Pop", "Romantic"),
+            SeedTrack("The Hills", "The Weeknd", "4050205", "4aWNr", 265, "R&B", "Moody", "yzTuBuRdAyA"),
+            SeedTrack("Fix You", "Coldplay", "892", "KbjZRxz", 296, "Rock", "Emotional", "k4V3Mo61fJM"),
+            SeedTrack("Perfect", "Ed Sheeran", "384236", "8p9MqP", 260, "Pop", "Romantic", "2Vv-BfVoq4g"),
             SeedTrack("NASA", "Ariana Grande", "1562681", "ePO7X", 245, "Pop", "Upbeat"),
             SeedTrack("All The Stars", "Kendrick Lamar, SZA", "525046", "BZdx9dx", 235, "Hip-Hop", "Dramatic"),
             SeedTrack("LUNCH", "Billie Eilish", "9635624", "KddRRvB", 179, "Pop", "Upbeat"),
             SeedTrack("Often", "The Weeknd", "4050205", "Mp8PJwV", 250, "R&B", "Moody"),
             SeedTrack("On My Way", "Alan Walker, Sabrina Carpenter", "1176900", "WYrNGp9", 216, "Pop", "Upbeat"),
-            SeedTrack("I Feel It Coming", "The Weeknd, Daft Punk", "4050205", "1VmZyaz", 265, "R&B", "Groovy"),
+            SeedTrack("I Feel It Coming", "The Weeknd, Daft Punk", "4050205", "1VmZyaz", 265, "R&B", "Groovy", "qFLhGq0060w"),
             SeedTrack("HUMBLE.", "Kendrick Lamar", "525046", "qRmmZ0P", 185, "Hip-Hop", "Hype"),
-            SeedTrack("Viva La Vida", "Coldplay", "892", "Z4bXj9v", 242, "Rock", "Upbeat"),
+            SeedTrack("Viva La Vida", "Coldplay", "892", "Z4bXj9v", 242, "Rock", "Upbeat", "dvgZkm1xWPE"),
             SeedTrack("Shake It Off", "Taylor Swift", "12246", "aW1JMYE", 221, "Pop", "Sunny"),
             SeedTrack("Wicked Games", "The Weeknd", "4050205", "kbmwoN", 331, "R&B", "Night Drive"),
             SeedTrack("goosebumps", "Travis Scott, Kendrick Lamar", "4495513", "zE37P", 250, "Hip-Hop", "Night Drive"),
-            SeedTrack("Espresso", "Sabrina Carpenter", "1176900", "79kjd39", 160, "Pop", "Sunny"),
-            SeedTrack("We Can't Be Friends", "Ariana Grande", "1562681", "oE44v95", 297, "Pop", "Emotional"),
+            SeedTrack("Espresso", "Sabrina Carpenter", "1176900", "79kjd39", 160, "Pop", "Sunny", "eVli-tstM5E"),
+            SeedTrack("We Can't Be Friends", "Ariana Grande", "1562681", "oE44v95", 297, "Pop", "Emotional", "KNtJGQkC-WI"),
             SeedTrack("Snooze", "SZA", "1193881", "1Ej98a5", 152, "R&B", "Chill"),
-            SeedTrack("Kill Bill", "SZA", "1193881", "35M6A98", 149, "R&B", "Moody"),
-            SeedTrack("Vampire", "Olivia Rodrigo", "11152580", "m7o6KJj", 208, "Pop", "Dramatic")
+            SeedTrack("Kill Bill", "SZA", "1193881", "35M6A98", 149, "R&B", "Moody", "SQnc1QibapQ"),
+            SeedTrack("Vampire", "Olivia Rodrigo", "11152580", "m7o6KJj", 208, "Pop", "Dramatic", "RlPNh_PBZb4"),
+            SeedTrack("Golden", "HUNTR/X", "", "r9ywoPN", 192, "K-Pop", "Upbeat")
         )
 
         private val ALL_SEED_TRACKS = PH_SEED_TRACKS + GLOBAL_SEED_TRACKS

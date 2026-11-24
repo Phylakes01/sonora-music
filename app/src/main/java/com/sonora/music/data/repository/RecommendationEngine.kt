@@ -1,6 +1,8 @@
 package com.sonora.music.data.repository
 
+import com.sonora.music.data.network.FullAudioResolver
 import com.sonora.music.data.network.MusicCatalogApi
+import com.sonora.music.data.network.RegionalContentFilter
 import com.sonora.music.model.Artist
 import com.sonora.music.model.ListeningEvent
 import com.sonora.music.model.Playlist
@@ -23,7 +25,16 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
         val genreScores = linkedMapOf<String, Int>()
         val artistScores = linkedMapOf<String, Int>()
 
-        history.forEach { event ->
+        val safeHistory = history.filterNot {
+            RegionalContentFilter.isExcludedIndianContent(
+                title = it.title,
+                artist = it.artist,
+                genre = it.genre
+            )
+        }
+        val safeLikedSongs = RegionalContentFilter.filterTracks(likedSongs)
+
+        safeHistory.forEach { event ->
             val genre = event.genre.trim()
             if (isMusicGenre(genre)) {
                 genreScores[genre] = (genreScores[genre] ?: 0) + 1
@@ -33,7 +44,7 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
                 artistScores[artist] = (artistScores[artist] ?: 0) + 1
             }
         }
-        likedSongs.forEach { track ->
+        safeLikedSongs.forEach { track ->
             val genre = track.genre.trim()
             if (isMusicGenre(genre)) {
                 genreScores[genre] = (genreScores[genre] ?: 0) + 2
@@ -50,7 +61,7 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
         val topGenre = rankedGenres.firstOrNull()
         val secondGenre = rankedGenres.getOrNull(1)
         val topArtist = rankedArtists.firstOrNull()
-        val knownIds = history.mapTo(HashSet()) { it.trackId } + likedSongs.mapTo(HashSet()) { it.id }
+        val knownIds = safeHistory.mapTo(HashSet()) { it.trackId } + safeLikedSongs.mapTo(HashSet()) { it.id }
 
         val phTopDeferred = async { catalogApi.getPhTopTracks(25) }
         val opmDeferred = async { catalogApi.getOpmTrendingTracks(25) }
@@ -77,29 +88,32 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
         val followedTracks = followedDeferred.awaitAll().flatten()
         val artistTracks = artistSearchDeferred.await()
 
-        val discoverCandidates = (opmTrending + topGenreTracks + globalTop + phTop).distinctBy { it.id }
+        val discoverCandidates = filterSafeFullTracks(
+            (opmTrending + topGenreTracks + globalTop + phTop).distinctBy { it.id }
+        )
         val freshDiscover = discoverCandidates.filter { it.id !in knownIds }
         val discoverTracks = (freshDiscover + discoverCandidates)
             .distinctBy { it.id }
             .take(20)
 
-        val releaseTracks = (followedTracks + phTop + secondGenreTracks + globalTop)
-            .distinctBy { it.id }
+        val releaseTracks = filterSafeFullTracks(
+            (followedTracks + phTop + secondGenreTracks + globalTop).distinctBy { it.id }
+        )
             .sortedWith(
                 compareByDescending<Track> { it.releaseDate.isNotBlank() }
                     .thenByDescending { it.releaseDate }
             )
             .take(20)
 
-        val likedMusic = likedSongs.filter {
+        val likedMusic = filterSafeFullTracks(safeLikedSongs).filter {
             it.source == TrackSource.AUDIUS &&
-                !it.isPreviewOnly &&
                 it.durationSec >= 90 &&
                 it.streamUrl.startsWith("http", ignoreCase = true)
         }.take(8)
-        val dailyTracks = (likedMusic + artistTracks + topGenreTracks + opmTrending + phTop + globalTop)
-            .distinctBy { it.id }
-            .take(20)
+        val dailyTracks = filterSafeFullTracks(
+            (likedMusic + artistTracks + topGenreTracks + opmTrending + phTop + globalTop)
+                .distinctBy { it.id }
+        ).take(20)
 
         listOf(
             Playlist(
@@ -187,16 +201,16 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
         val opmDeferred = async { catalogApi.getOpmTrendingTracks(15) }
         val globalDeferred = async { catalogApi.getGlobalTopTracks(15) }
 
-        val candidates = (
+        val candidates = filterSafeFullTracks(
             artistDeferred.await() +
                 genreDeferred.await() +
                 opmDeferred.await() +
                 globalDeferred.await()
-            )
+        )
             .distinctBy { it.id }
             .filter { it.id !in excluded && it.streamUrl.isNotBlank() }
 
-        candidates.take(count).map { it.copy(isSmartPick = true) }
+        candidates.take(count).map { it.copy(isSmartPick = true, isPreviewOnly = false) }
     }
 
     suspend fun buildTrackRadio(seedTrack: Track): List<Track> = coroutineScope {
@@ -228,20 +242,24 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
             .awaitAll()
             .flatten()
 
-        val related = (
+        val related = filterSafeFullTracks(
             moodDeferred.await() +
                 artistDeferred.await() +
                 relatedArtistTracks +
                 genreDeferred.await()
-            )
+        )
             .filter { it.id != seedTrack.id }
             .distinctBy { it.id }
             .take(24)
 
-        listOf(seedTrack) + related
+        val safeSeed = filterSafeFullTracks(listOf(seedTrack))
+        safeSeed + related
     }
 
     suspend fun buildArtistRadio(artist: Artist): List<Track> = coroutineScope {
+        if (RegionalContentFilter.isExcludedIndianContent(title = "", artist = artist.name, genre = artist.bio, extra = artist.handle)) {
+            return@coroutineScope emptyList()
+        }
         val artistTracksDeferred = async { catalogApi.getArtistTopTracks(artist.id, artist.name, limit = 15) }
         val relatedArtistsDeferred = async { catalogApi.getRelatedArtists(artist.id) }
         val searchDeferred = async {
@@ -266,7 +284,7 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
             catalogApi.getOpmTrendingTracks(15)
         }
 
-        (artistTracks + relatedTracks + searchTracks + fallbackTracks)
+        filterSafeFullTracks(artistTracks + relatedTracks + searchTracks + fallbackTracks)
             .distinctBy { it.id }
             .take(25)
     }
@@ -282,18 +300,20 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
             async { catalogApi.searchTracks(term, limit = 15) }
         }
 
-        val fetched = (genreDeferreds.awaitAll().flatten() + searchDeferreds.awaitAll().flatten())
+        val fetched = filterSafeFullTracks(
+            genreDeferreds.awaitAll().flatten() + searchDeferreds.awaitAll().flatten()
+        )
             .distinctBy { it.id }
             .toMutableList()
 
         if (fetched.size < 10) {
             val phFallback = async { catalogApi.getPhTopTracks(20) }
             val globalFallback = async { catalogApi.getGlobalTopTracks(15) }
-            fetched.addAll(phFallback.await())
-            fetched.addAll(globalFallback.await())
+            fetched.addAll(filterSafeFullTracks(phFallback.await()))
+            fetched.addAll(filterSafeFullTracks(globalFallback.await()))
         }
 
-        val tracks = fetched.distinctBy { it.id }.take(25)
+        val tracks = filterSafeFullTracks(fetched).distinctBy { it.id }.take(25)
         val (colorStart, colorEnd) = selectPaletteForPrompt(trimmedPrompt, genres)
         val displayTitle = formatPromptTitle(trimmedPrompt)
 
@@ -530,6 +550,10 @@ class RecommendationEngine(private val catalogApi: MusicCatalogApi) {
         }
         return if (formatted.length > 36) "${formatted.take(33)}..." else formatted
     }
+
+    private fun filterSafeFullTracks(tracks: List<Track>): List<Track> =
+        RegionalContentFilter.filterTracks(tracks)
+            .filter { !it.isPreviewOnly && !FullAudioResolver.isPreviewAudioUrl(it.streamUrl) }
 
     private fun isMusicGenre(genre: String): Boolean {
         if (genre.isBlank()) return false

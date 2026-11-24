@@ -25,6 +25,7 @@ import com.sonora.music.data.network.LyricsApi
 import com.sonora.music.data.network.MusicCatalogApi
 import com.sonora.music.data.network.PodcastApi
 import com.sonora.music.data.network.RadioApi
+import com.sonora.music.data.network.RegionalContentFilter
 import com.sonora.music.data.repository.RecommendationEngine
 import com.sonora.music.download.DownloadManager
 import com.sonora.music.localfiles.LocalAudioScanner
@@ -58,6 +59,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import kotlin.math.abs
 
@@ -86,7 +88,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         onTrackListened = { track, listenedMs ->
             recordListeningEvent(track, listenedMs)
         },
-        trackResolver = { catalogApi.resolvePlayableTrack(it) }
+        trackResolver = { catalogApi.resolvePlayableTrack(it) },
+        onVideoTrackSelected = { _ ->
+            _uiState.update { state ->
+                state.copy(
+                    isVideoMode = true,
+                    isFullPlayerOpen = true
+                )
+            }
+        }
     )
 
     private val _uiState = MutableStateFlow(SonoraUiState())
@@ -130,7 +140,27 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun handleDeepLink(intent: Intent?) {
-        val data = intent?.data ?: return
+        if (intent == null) return
+
+        if (intent.action == Intent.ACTION_SEND) {
+            val type = intent.type.orEmpty()
+            if (type.isBlank() || type.startsWith("text/", ignoreCase = true)) {
+                val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+                val trimmed = sharedText?.trim().orEmpty()
+                if (trimmed.isNotEmpty()) {
+                    if (trimmed.contains("sonora://playlist", ignoreCase = true)) {
+                        importPlaylistCode(trimmed, mergeIntoJamQueue = false)
+                        selectTab(AppTab.LIBRARY)
+                    } else {
+                        handleSharedYouTubeText(trimmed)
+                    }
+                }
+            }
+            return
+        }
+
+        val data = intent.data ?: return
         if (data.scheme.equals("sonora", ignoreCase = true) &&
             data.host.equals("playlist", ignoreCase = true)
         ) {
@@ -142,7 +172,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     isLyricsOpen = false,
                     isQueueOpen = false,
                     isAudioStudioOpen = false,
-                    isAiGeneratorOpen = false
+                    isAiGeneratorOpen = false,
+                    isImportYouTubeOpen = false
                 )
             }
             importPlaylistCode(raw, mergeIntoJamQueue = false)
@@ -150,11 +181,43 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    private fun handleSharedYouTubeText(rawText: String) {
+        val candidateUrl = Regex("""https?://\S+""", RegexOption.IGNORE_CASE)
+            .find(rawText)
+            ?.value
+            ?.trimEnd('.', ',', ')', ']', ';', '"', '\'')
+            ?: rawText
+        showSnackbar("Importing YouTube link...")
+        viewModelScope.launch {
+            val result = runCatching { catalogApi.importFromYouTube(candidateUrl) }.getOrNull()
+            val imported = result?.tracks
+                ?.let { RegionalContentFilter.filterTracks(it) }
+                ?.filter(::isNonPreviewCatalogTrack)
+                .orEmpty()
+            if (imported.isEmpty()) {
+                val msg = if ((result?.excludedCount ?: 0) > 0) {
+                    "Shared link was filtered by regional content settings"
+                } else {
+                    "No playable YouTube video found in shared text"
+                }
+                showSnackbar(msg)
+                return@launch
+            }
+            mergeImportedYouTubeTracks(imported)
+            val first = imported.first()
+            onPlayMusicVideo(first, imported)
+            showSnackbar("Playing \"${first.title}\"")
+        }
+    }
+
     private fun loadInitialLocalState(): Job = viewModelScope.launch(Dispatchers.IO) {
         val playlists = store.loadPlaylists().map { pl ->
-            pl.copy(tracks = pl.tracks.map(::sanitizeTrack))
+            pl.copy(tracks = RegionalContentFilter.filterTracks(pl.tracks.map(::sanitizeTrack)))
         }
-        val liked = store.loadLikedSongs().map(::sanitizeTrack)
+        val liked = RegionalContentFilter.filterTracks(store.loadLikedSongs().map(::sanitizeTrack))
+        val importedVideos = RegionalContentFilter.filterTracks(
+            store.getImportedYouTubeTracks().map(::sanitizeTrack)
+        )
         val followed = store.loadFollowedArtistIds()
         val recentSearches = store.loadRecentSearches()
         val audioSettings = store.loadAudioSettings()
@@ -162,37 +225,50 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         val wrapped = recommendationEngine.computeWrapped(history, liked)
         val hasPerm = hasLocalAudioPermission()
 
-        val initialRecentTracks = history
-            .asReversed()
-            .distinctBy { it.trackId }
-            .take(15)
-            .map { ev ->
-                val inferredSource = when {
-                    ev.trackId.startsWith("dz_") -> TrackSource.DEEZER
-                    ev.trackId.startsWith("it_") -> TrackSource.ITUNES
-                    ev.trackId.startsWith("pod_") -> TrackSource.PODCAST
-                    ev.trackId.startsWith("ab_") -> TrackSource.AUDIOBOOK
-                    ev.trackId.startsWith("radio_") -> TrackSource.RADIO
-                    ev.trackId.startsWith("local_") -> TrackSource.LOCAL
-                    else -> TrackSource.DEEZER
+        val initialRecentTracks = RegionalContentFilter.filterTracks(
+            history
+                .asReversed()
+                .distinctBy { it.trackId }
+                .take(15)
+                .map { ev ->
+                    val inferredSource = when {
+                        ev.trackId.startsWith("dz_") -> TrackSource.DEEZER
+                        ev.trackId.startsWith("it_") -> TrackSource.ITUNES
+                        ev.trackId.startsWith("yt_") -> TrackSource.YOUTUBE
+                        ev.trackId.startsWith("pod_") -> TrackSource.PODCAST
+                        ev.trackId.startsWith("ab_") -> TrackSource.AUDIOBOOK
+                        ev.trackId.startsWith("radio_") -> TrackSource.RADIO
+                        ev.trackId.startsWith("local_") -> TrackSource.LOCAL
+                        else -> TrackSource.DEEZER
+                    }
+                    val ytId = if (inferredSource == TrackSource.YOUTUBE) {
+                        ev.trackId.removePrefix("yt_")
+                    } else {
+                        ""
+                    }
+                    Track(
+                        id = ev.trackId,
+                        title = ev.title,
+                        artist = ev.artist,
+                        genre = ev.genre,
+                        artworkUrl = ev.artworkUrl,
+                        source = inferredSource,
+                        isLive = inferredSource == TrackSource.RADIO,
+                        isPreviewOnly = false,
+                        youtubeVideoId = ytId,
+                        hasMusicVideo = ytId.isNotBlank()
+                    )
                 }
-                Track(
-                    id = ev.trackId,
-                    title = ev.title,
-                    artist = ev.artist,
-                    genre = ev.genre,
-                    artworkUrl = ev.artworkUrl,
-                    source = inferredSource,
-                    isLive = inferredSource == TrackSource.RADIO,
-                    isPreviewOnly = false
-                )
-            }
+        )
 
         _uiState.update { state ->
             state.copy(
                 audioSettings = audioSettings,
                 wrappedStats = wrapped,
-                home = state.home.copy(recentlyPlayed = initialRecentTracks),
+                home = state.home.copy(
+                    recentlyPlayed = initialRecentTracks,
+                    musicVideos = mergeMusicVideoLists(importedVideos, state.home.musicVideos)
+                ),
                 search = state.search.copy(recentSearches = recentSearches),
                 library = state.library.copy(
                     userPlaylists = playlists,
@@ -292,10 +368,17 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 it.copy(
                     currentLyrics = null,
                     isLoadingLyrics = false,
-                    dominantAccent = EmeraldAccent
+                    dominantAccent = EmeraldAccent,
+                    isVideoMode = false
                 )
             }
             return
+        }
+
+        if (track.isVideoOnly) {
+            _uiState.update { it.copy(isVideoMode = true) }
+        } else if (track.youtubeVideoId.isBlank()) {
+            _uiState.update { it.copy(isVideoMode = false) }
         }
 
         // Fetch lyrics asynchronously
@@ -433,9 +516,16 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun playTrack(track: Track, queue: List<Track>) {
-        val effectiveQueue = if (queue.any { it.id == track.id }) queue else listOf(track) + queue
+        if (track.isVideoOnly) {
+            onPlayMusicVideo(track, queue)
+            return
+        }
+        val rawQueue = if (queue.any { it.id == track.id }) queue else listOf(track) + queue
+        val effectiveQueue = RegionalContentFilter.filterTracks(rawQueue)
+            .ifEmpty { listOf(track) }
         val startIndex = effectiveQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-        playbackController.playQueue(effectiveQueue, startIndex)
+        _uiState.update { it.copy(isVideoMode = false) }
+        playbackController.playQueue(effectiveQueue, startIndex, startPausedForVideo = false)
 
         if (!_uiState.value.audioSettings.privateSession) {
             val cleanRecent = sanitizeTrack(track)
@@ -446,11 +536,56 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    override fun togglePlayPause() = playbackController.togglePlayPause()
+    override fun togglePlayPause() {
+        val state = _uiState.value
+        val current = state.playback.currentTrack
+        if (state.isVideoMode && current != null && !current.isVideoOnly) {
+            _uiState.update { it.copy(isVideoMode = false) }
+        }
+        playbackController.togglePlayPause()
+    }
 
-    override fun skipNext() = playbackController.skipNext()
+    override fun skipNext() {
+        val state = _uiState.value
+        if (state.isVideoMode) {
+            val pb = state.playback
+            val nextIdx = QueueEngine.resolveNextQueueIndex(pb.currentIndex, pb.queue.size, pb.repeatMode)
+            if (nextIdx != null) {
+                val nextTrack = pb.queue[nextIdx]
+                if (nextTrack.youtubeVideoId.isNotBlank()) {
+                    _uiState.update { it.copy(isVideoMode = true) }
+                    playbackController.skipToQueueIndex(nextIdx, startPausedForVideo = true)
+                } else {
+                    _uiState.update { it.copy(isVideoMode = false) }
+                    playbackController.skipToQueueIndex(nextIdx, startPausedForVideo = false)
+                }
+            } else {
+                playbackController.pause()
+            }
+            return
+        }
+        playbackController.skipNext()
+    }
 
-    override fun skipPrev() = playbackController.skipPrev()
+    override fun skipPrev() {
+        val state = _uiState.value
+        if (state.isVideoMode) {
+            val pb = state.playback
+            val prevIdx = QueueEngine.resolvePrevQueueIndex(pb.currentIndex, pb.queue.size, pb.repeatMode)
+            if (prevIdx != null) {
+                val prevTrack = pb.queue[prevIdx]
+                if (prevTrack.youtubeVideoId.isNotBlank()) {
+                    _uiState.update { it.copy(isVideoMode = true) }
+                    playbackController.skipToQueueIndex(prevIdx, startPausedForVideo = true)
+                } else {
+                    _uiState.update { it.copy(isVideoMode = false) }
+                    playbackController.skipToQueueIndex(prevIdx, startPausedForVideo = false)
+                }
+            }
+            return
+        }
+        playbackController.skipPrev()
+    }
 
     override fun seekTo(positionMs: Long) = playbackController.seekTo(positionMs)
 
@@ -733,6 +868,14 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
 
     override fun downloadTrack(track: Track) {
         if (track.isLive || track.source == TrackSource.LOCAL) return
+        if (track.isVideoOnly || (track.source == TrackSource.YOUTUBE && track.streamUrl.isBlank())) {
+            showSnackbar("Official YouTube videos stream in-app — tap Video to watch")
+            return
+        }
+        if (track.isPreviewOnly || QueueEngine.isThirtySecondPreviewUrl(track.streamUrl)) {
+            showSnackbar("Full song stream unavailable for ${track.title}")
+            return
+        }
         downloadManager.downloadTrack(track)
         showSnackbar("Downloading \"${track.title}\" for offline playback")
     }
@@ -740,7 +883,10 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     override fun downloadPlaylist(tracks: List<Track>) {
         val downloadable = tracks.filter {
             !it.isLive &&
+                !it.isVideoOnly &&
+                !it.isPreviewOnly &&
                 it.source != TrackSource.LOCAL &&
+                !(it.source == TrackSource.YOUTUBE && it.streamUrl.isBlank()) &&
                 ((it.streamUrl.isNotBlank() && !QueueEngine.isThirtySecondPreviewUrl(it.streamUrl)) ||
                     (it.source != TrackSource.PODCAST && it.source != TrackSource.AUDIOBOOK))
         }
@@ -803,6 +949,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     search = it.search.copy(
                         isSearching = false,
                         songs = emptyList(),
+                        musicVideos = emptyList(),
                         artists = emptyList(),
                         playlists = emptyList(),
                         podcasts = emptyList(),
@@ -821,27 +968,72 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     private suspend fun executeSearch(cleanQuery: String, saveToHistoryAfterSettle: Boolean) {
+        if (RegionalContentFilter.isExcludedIndianContent(title = cleanQuery, artist = cleanQuery)) {
+            _uiState.update {
+                it.copy(
+                    search = it.search.copy(
+                        isSearching = false,
+                        songs = emptyList(),
+                        musicVideos = emptyList(),
+                        artists = emptyList(),
+                        playlists = emptyList(),
+                        podcasts = emptyList(),
+                        audiobooks = emptyList(),
+                        radioStations = emptyList()
+                    )
+                )
+            }
+            return
+        }
+
+        val effectiveQuery = if (cleanQuery.contains("maria deborah", ignoreCase = true)) {
+            cleanQuery.replace("maria deborah", "Mariah Deborah", ignoreCase = true)
+        } else {
+            cleanQuery
+        }
+
         _uiState.update { it.copy(search = it.search.copy(isSearching = true)) }
         supervisorScope {
-            val songsDef = async { runCatching { catalogApi.searchTracks(cleanQuery, limit = 30) }.getOrDefault(emptyList()) }
-            val artistsDef = async { runCatching { catalogApi.searchArtists(cleanQuery, limit = 15) }.getOrDefault(emptyList()) }
-            val playlistsDef = async { runCatching { catalogApi.searchPlaylists(cleanQuery, limit = 15) }.getOrDefault(emptyList()) }
-            val podcastsDef = async { runCatching { podcastApi.searchPodcasts(cleanQuery, limit = 16, country = "PH") }.getOrDefault(emptyList()) }
-            val booksDef = async { runCatching { audiobookApi.searchAudiobooks(cleanQuery, limit = 16) }.getOrDefault(emptyList()) }
-            val radioDef = async { runCatching { radioApi.searchStations(cleanQuery, limit = 20) }.getOrDefault(emptyList()) }
+            val songsDef = async { runCatching { catalogApi.searchTracks(effectiveQuery, limit = 30) }.getOrDefault(emptyList()) }
+            val videosDef = async { runCatching { catalogApi.searchVideos(cleanQuery) }.getOrDefault(emptyList()) }
+            val artistsDef = async { runCatching { catalogApi.searchArtists(effectiveQuery, limit = 15) }.getOrDefault(emptyList()) }
+            val playlistsDef = async { runCatching { catalogApi.searchPlaylists(effectiveQuery, limit = 15) }.getOrDefault(emptyList()) }
+            val podcastsDef = async { runCatching { podcastApi.searchPodcasts(effectiveQuery, limit = 16, country = "PH") }.getOrDefault(emptyList()) }
+            val booksDef = async { runCatching { audiobookApi.searchAudiobooks(effectiveQuery, limit = 16) }.getOrDefault(emptyList()) }
+            val radioDef = async { runCatching { radioApi.searchStations(effectiveQuery, limit = 20) }.getOrDefault(emptyList()) }
+            val importedDef = async(Dispatchers.IO) {
+                filterImportedVideosForQuery(store.getImportedYouTubeTracks(), cleanQuery, effectiveQuery)
+            }
 
-            val songs = songsDef.await()
-            val artists = artistsDef.await()
+            val songs = RegionalContentFilter.filterTracks(songsDef.await()).filter(::isNonPreviewCatalogTrack)
+            val musicVideos = RegionalContentFilter.filterTracks(
+                (importedDef.await() + videosDef.await())
+                    .filter(::isNonPreviewCatalogTrack)
+                    .distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+            )
+            val artists = RegionalContentFilter.filterArtists(artistsDef.await())
             val playlists = playlistsDef.await()
-            val podcasts = podcastsDef.await()
-            val books = booksDef.await()
-            val radios = radioDef.await()
+            val podcasts = podcastsDef.await().filterNot {
+                RegionalContentFilter.isExcludedIndianContent(
+                    title = it.title,
+                    artist = it.author,
+                    genre = it.genre
+                )
+            }
+            val books = booksDef.await().filterNot {
+                RegionalContentFilter.isExcludedIndianContent(
+                    title = it.title,
+                    artist = it.author
+                )
+            }
+            val radios = RegionalContentFilter.filterTracks(radioDef.await())
 
             _uiState.update { state ->
                 state.copy(
                     search = state.search.copy(
                         isSearching = false,
                         songs = songs,
+                        musicVideos = musicVideos,
                         artists = artists,
                         playlists = playlists,
                         podcasts = podcasts,
@@ -855,6 +1047,25 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         if (saveToHistoryAfterSettle && cleanQuery.length >= 2) {
             delay(850)
             recordRecentSearch(cleanQuery)
+        }
+    }
+
+    private fun filterImportedVideosForQuery(
+        imported: List<Track>,
+        rawQuery: String,
+        expandedQuery: String
+    ): List<Track> {
+        val queries = listOf(rawQuery.trim(), expandedQuery.trim())
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+        if (queries.isEmpty()) return emptyList()
+        return RegionalContentFilter.filterTracks(imported).filter { track ->
+            queries.any { q ->
+                track.title.contains(q, ignoreCase = true) ||
+                    track.artist.contains(q, ignoreCase = true) ||
+                    track.genre.contains(q, ignoreCase = true) ||
+                    track.youtubeVideoId.equals(q, ignoreCase = true)
+            }
         }
     }
 
@@ -970,9 +1181,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                 }
                 if (needsFetch) {
                     detailJob = viewModelScope.launch {
-                        val fetched = runCatching {
-                            catalogApi.getPlaylistTracks(latestUserPlaylist.id)
-                        }.getOrDefault(emptyList())
+                        val fetched = RegionalContentFilter.filterTracks(
+                            runCatching {
+                                catalogApi.getPlaylistTracks(latestUserPlaylist.id)
+                            }.getOrDefault(emptyList())
+                        ).filter(::isNonPreviewCatalogTrack)
                         val hydrated = latestUserPlaylist.copy(
                             tracks = fetched,
                             trackIds = fetched.map { t -> t.id }
@@ -1001,13 +1214,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     )
                 }
                 detailJob = viewModelScope.launch {
-                    val tracks = runCatching {
-                        catalogApi.getArtistTopTracks(
-                            artistId = route.artist.id,
-                            artistName = route.artist.name,
-                            limit = 25
-                        )
-                    }.getOrDefault(emptyList())
+                    val tracks = RegionalContentFilter.filterTracks(
+                        runCatching {
+                            catalogApi.getArtistTopTracks(
+                                artistId = route.artist.id,
+                                artistName = route.artist.name,
+                                limit = 25
+                            )
+                        }.getOrDefault(emptyList())
+                    ).filter(::isNonPreviewCatalogTrack)
                     _uiState.update {
                         it.copy(detail = it.detail.copy(isLoading = false, tracks = tracks))
                     }
@@ -1213,7 +1428,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
 
     override fun shareTrack(track: Track) {
         val safeStream = track.streamUrl.takeUnless { QueueEngine.isThirtySecondPreviewUrl(it) }.orEmpty()
-        val shareLink = track.externalUrl.ifBlank { safeStream }
+        val shareLink = track.externalUrl
+            .ifBlank { track.effectiveYoutubeUrl }
+            .ifBlank { safeStream }
         val body = buildString {
             append("Listening to \"${track.title}\" by ${track.displayArtist} on Sonora")
             if (shareLink.isNotBlank() && !track.isLive) {
@@ -1262,6 +1479,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             filter.equals("PH Hits", ignoreCase = true) || filter.equals("Music", ignoreCase = true) -> "PH Hits"
             filter.equals("OPM", ignoreCase = true) -> "OPM"
             filter.equals("Global", ignoreCase = true) -> "Global"
+            filter.equals("Videos", ignoreCase = true) || filter.equals("Music Videos", ignoreCase = true) -> "Videos"
             filter.equals("PH Radio", ignoreCase = true) || filter.equals("Radio", ignoreCase = true) -> "PH Radio"
             filter.equals("Podcasts", ignoreCase = true) -> "Podcasts"
             else -> filter.ifBlank { "All" }
@@ -1273,6 +1491,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             "PH Hits" -> home.phTopTracks.isEmpty()
             "OPM" -> home.opmTracks.isEmpty()
             "Global" -> home.globalTopTracks.isEmpty()
+            "Videos" -> home.musicVideos.isEmpty()
             "PH Radio" -> home.liveRadio.isEmpty()
             "Podcasts" -> home.podcasts.isEmpty()
             else -> false
@@ -1283,11 +1502,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     }
 
     override fun openFullTrackExternal(track: Track) {
-        val rawQuery = listOf(track.title, track.displayArtist)
-            .filter { it.isNotBlank() && it != "Featured Artist" }
-            .joinToString(" ")
-        val encodedQuery = Uri.encode(rawQuery)
-        val url = "https://www.youtube.com/results?search_query=$encodedQuery"
+        val url = if (track.youtubeVideoId.isNotBlank()) {
+            track.effectiveYoutubeUrl
+        } else {
+            val rawQuery = listOf(track.title, track.displayArtist)
+                .filter { it.isNotBlank() && it != "Featured Artist" }
+                .joinToString(" ")
+            val encodedQuery = Uri.encode(rawQuery)
+            "https://www.youtube.com/results?search_query=$encodedQuery"
+        }
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -1298,6 +1521,187 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         if (!launched) {
             showSnackbar("No browser app found to open full song")
         }
+    }
+
+    override fun onSetVideoMode(enabled: Boolean) {
+        val currentTrack = _uiState.value.playback.currentTrack
+        if (enabled) {
+            if (currentTrack != null && currentTrack.youtubeVideoId.isBlank()) {
+                showSnackbar("No music video linked for \"${currentTrack.title}\"")
+                return
+            }
+            playbackController.pause()
+            _uiState.update { it.copy(isVideoMode = true) }
+        } else {
+            if (currentTrack != null &&
+                currentTrack.streamUrl.isBlank() &&
+                currentTrack.localUri.isNullOrBlank()
+            ) {
+                showSnackbar("Audio-only stream unavailable for this MV — play video mode")
+                return
+            }
+            _uiState.update { it.copy(isVideoMode = false) }
+            playbackController.play()
+        }
+    }
+
+    override fun onPlayMusicVideo(track: Track, queue: List<Track>) {
+        if (track.youtubeVideoId.isBlank()) {
+            playTrack(track, queue)
+            return
+        }
+        val rawQueue = if (queue.any { it.id == track.id }) queue else listOf(track) + queue
+        val effectiveQueue = RegionalContentFilter.filterTracks(rawQueue)
+            .ifEmpty { listOf(track) }
+        val startIndex = effectiveQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        playbackController.playQueue(effectiveQueue, startIndex, startPausedForVideo = true)
+
+        _uiState.update { state ->
+            val updatedRecent = if (!state.audioSettings.privateSession) {
+                val cleanRecent = sanitizeTrack(track)
+                (listOf(cleanRecent) + state.home.recentlyPlayed.filterNot { it.id == cleanRecent.id }).take(15)
+            } else {
+                state.home.recentlyPlayed
+            }
+            state.copy(
+                isVideoMode = true,
+                isFullPlayerOpen = true,
+                home = state.home.copy(recentlyPlayed = updatedRecent)
+            )
+        }
+    }
+
+    override fun onOpenImportYouTube() {
+        _uiState.update {
+            it.copy(
+                isImportYouTubeOpen = true,
+                youtubeImportError = null
+            )
+        }
+    }
+
+    override fun onCloseImportYouTube() {
+        _uiState.update {
+            it.copy(
+                isImportYouTubeOpen = false,
+                isImportingYouTube = false,
+                youtubeImportError = null
+            )
+        }
+    }
+
+    override fun onImportYouTube(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.update {
+                it.copy(youtubeImportError = "Paste a YouTube URL, video ID, playlist, or artist name")
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(isImportingYouTube = true, youtubeImportError = null)
+        }
+        viewModelScope.launch {
+            val result = runCatching { catalogApi.importFromYouTube(trimmed) }.getOrNull()
+            if (result == null) {
+                _uiState.update {
+                    it.copy(
+                        isImportingYouTube = false,
+                        youtubeImportError = "Unable to connect to YouTube right now. Try again."
+                    )
+                }
+                return@launch
+            }
+            val filtered = RegionalContentFilter.filterTracks(result.tracks)
+                .filter(::isNonPreviewCatalogTrack)
+            if (filtered.isEmpty()) {
+                val errorText = if (result.excludedCount > 0) {
+                    "Filtered unsupported regional content from that link."
+                } else {
+                    "No playable music videos found for \"$trimmed\"."
+                }
+                _uiState.update {
+                    it.copy(
+                        isImportingYouTube = false,
+                        youtubeImportError = errorText
+                    )
+                }
+                return@launch
+            }
+            mergeImportedYouTubeTracks(filtered)
+            _uiState.update {
+                it.copy(
+                    isImportYouTubeOpen = false,
+                    isImportingYouTube = false,
+                    youtubeImportError = null
+                )
+            }
+            val countLabel = if (filtered.size == 1) "1 video" else "${filtered.size} videos"
+            showSnackbar("Imported $countLabel from ${result.sourceLabel}")
+        }
+    }
+
+    override fun onImportYouTubePack(packId: String) {
+        _uiState.update {
+            it.copy(isImportingYouTube = true, youtubeImportError = null)
+        }
+        viewModelScope.launch {
+            val packTracks = withContext(Dispatchers.IO) {
+                val basePack = runCatching { catalogApi.getYouTubePackTracks(packId) }.getOrDefault(emptyList())
+                if (packId.equals("wish_1075", ignoreCase = true)) {
+                    val liveRss = runCatching { catalogApi.importFromYouTube("@wish1075").tracks }.getOrDefault(emptyList())
+                    (liveRss + basePack).distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+                } else {
+                    basePack
+                }
+            }
+            val filtered = RegionalContentFilter.filterTracks(packTracks)
+                .filter(::isNonPreviewCatalogTrack)
+            if (filtered.isEmpty()) {
+                _uiState.update {
+                    it.copy(
+                        isImportingYouTube = false,
+                        youtubeImportError = "Pack currently has no available videos."
+                    )
+                }
+                return@launch
+            }
+            mergeImportedYouTubeTracks(filtered)
+            _uiState.update {
+                it.copy(
+                    isImportYouTubeOpen = false,
+                    isImportingYouTube = false,
+                    youtubeImportError = null
+                )
+            }
+            showSnackbar("Added ${filtered.size} Music Videos to your feed")
+        }
+    }
+
+    private suspend fun mergeImportedYouTubeTracks(newTracks: List<Track>) {
+        val cleanNew = RegionalContentFilter.filterTracks(newTracks)
+            .filter(::isNonPreviewCatalogTrack)
+        if (cleanNew.isEmpty()) return
+
+        val existingImported = withContext(Dispatchers.IO) { store.getImportedYouTubeTracks() }
+        val mergedImported = RegionalContentFilter.filterTracks(
+            (cleanNew + existingImported).distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+        )
+        withContext(Dispatchers.IO) {
+            store.saveImportedYouTubeTracks(mergedImported)
+        }
+        _uiState.update { state ->
+            val combinedFeed = mergeMusicVideoLists(mergedImported, state.home.musicVideos)
+            state.copy(home = state.home.copy(musicVideos = combinedFeed))
+        }
+    }
+
+    private fun mergeMusicVideoLists(primary: List<Track>, secondary: List<Track>): List<Track> {
+        return RegionalContentFilter.filterTracks(
+            (primary + secondary)
+                .filter(::isNonPreviewCatalogTrack)
+                .distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+        )
     }
 
     override fun loadMoreGenre(genre: String) {
@@ -1316,7 +1720,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
             return
         }
         genreJob = viewModelScope.launch {
-            val tracks = runCatching { catalogApi.getGenreTracks(genre, limit = 30) }.getOrDefault(emptyList())
+            val tracks = RegionalContentFilter.filterTracks(
+                runCatching { catalogApi.getGenreTracks(genre, limit = 30) }.getOrDefault(emptyList())
+            ).filter(::isNonPreviewCatalogTrack)
             _uiState.update { state ->
                 if (state.home.selectedGenre == genre) {
                     state.copy(home = state.home.copy(genreTracks = tracks))
@@ -1330,25 +1736,100 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     override fun refreshHome() {
         homeJob?.cancel()
         homeJob = viewModelScope.launch {
-            _uiState.update { it.copy(home = it.home.copy(isLoading = true, errorMessage = null)) }
             val offlineNow = !isNetworkConnected()
+            if (_uiState.value.home.phTopTracks.isEmpty() && !offlineNow) {
+                initialLoadJob?.join()
+                val instantPh = catalogApi.getInstantPhTracks(40)
+                val instantOpm = catalogApi.getInstantOpmTracks(35)
+                val instantGlobal = catalogApi.getInstantGlobalTracks(40)
+                val instantMvs = withContext(Dispatchers.IO) {
+                    val imported = store.getImportedYouTubeTracks()
+                    mergeMusicVideoLists(imported, catalogApi.getInstantMusicVideos())
+                }
+                val instantQuick = buildVerifiedQuickPicks(
+                    recentTracks = _uiState.value.home.recentlyPlayed,
+                    likedTracks = _uiState.value.library.likedSongs,
+                    phTopTracks = instantPh,
+                    globalTopTracks = instantGlobal
+                )
+                _uiState.update { state ->
+                    state.copy(
+                        home = state.home.copy(
+                            isLoading = false,
+                            isOffline = false,
+                            quickPicks = instantQuick,
+                            phTopTracks = instantPh,
+                            opmTracks = instantOpm,
+                            phArtists = catalogApi.getInstantPhArtists(),
+                            globalTopTracks = instantGlobal,
+                            globalArtists = catalogApi.getInstantGlobalArtists(),
+                            trendingTracks = instantPh,
+                            genreTracks = instantPh,
+                            musicVideos = instantMvs,
+                            errorMessage = null
+                        )
+                    )
+                }
+            } else if (_uiState.value.home.phTopTracks.isEmpty()) {
+                _uiState.update { it.copy(home = it.home.copy(isLoading = true, errorMessage = null)) }
+            }
 
             supervisorScope {
-                val phTopDef = async { runCatching { catalogApi.getPhTopTracks(40) }.getOrDefault(emptyList()) }
-                val opmDef = async { runCatching { catalogApi.getOpmTrendingTracks(35) }.getOrDefault(emptyList()) }
-                val globalTopDef = async { runCatching { catalogApi.getGlobalTopTracks(40) }.getOrDefault(emptyList()) }
-                val phArtistsDef = async { runCatching { catalogApi.getPhTrendingArtists() }.getOrDefault(emptyList()) }
-                val globalArtistsDef = async { runCatching { catalogApi.getGlobalTrendingArtists() }.getOrDefault(emptyList()) }
-                val playlistsDef = async { runCatching { catalogApi.getFeaturedPlaylists() }.getOrDefault(emptyList()) }
-                val podcastsDef = async {
-                    runCatching { podcastApi.searchPodcasts("philippines", limit = 16, country = "PH") }.getOrDefault(emptyList())
+                val phTopDef = async {
+                    withTimeoutOrNull(12_000L) {
+                        runCatching { catalogApi.getPhTopTracks(40) }.getOrNull()
+                    }.orEmpty()
                 }
-                val audiobooksDef = async { runCatching { audiobookApi.searchAudiobooks("", limit = 16) }.getOrDefault(emptyList()) }
-                val radioDef = async { runCatching { radioApi.getPhStations(20) }.getOrDefault(emptyList()) }
+                val opmDef = async {
+                    withTimeoutOrNull(12_000L) {
+                        runCatching { catalogApi.getOpmTrendingTracks(35) }.getOrNull()
+                    }.orEmpty()
+                }
+                val globalTopDef = async {
+                    withTimeoutOrNull(12_000L) {
+                        runCatching { catalogApi.getGlobalTopTracks(40) }.getOrNull()
+                    }.orEmpty()
+                }
+                val musicVideosDef = async {
+                    withTimeoutOrNull(10_000L) {
+                        runCatching { catalogApi.getCombinedMusicVideos() }.getOrNull()
+                    }.orEmpty()
+                }
+                val phArtistsDef = async {
+                    withTimeoutOrNull(8_000L) {
+                        runCatching { catalogApi.getPhTrendingArtists() }.getOrNull()
+                    }.orEmpty()
+                }
+                val globalArtistsDef = async {
+                    withTimeoutOrNull(8_000L) {
+                        runCatching { catalogApi.getGlobalTrendingArtists() }.getOrNull()
+                    }.orEmpty()
+                }
+                val playlistsDef = async {
+                    withTimeoutOrNull(10_000L) {
+                        runCatching { catalogApi.getFeaturedPlaylists() }.getOrNull()
+                    }.orEmpty()
+                }
+                val podcastsDef = async {
+                    withTimeoutOrNull(8_000L) {
+                        runCatching { podcastApi.searchPodcasts("philippines", limit = 16, country = "PH") }.getOrNull()
+                    }.orEmpty()
+                }
+                val audiobooksDef = async {
+                    withTimeoutOrNull(8_000L) {
+                        runCatching { audiobookApi.searchAudiobooks("", limit = 16) }.getOrNull()
+                    }.orEmpty()
+                }
+                val radioDef = async {
+                    withTimeoutOrNull(8_000L) {
+                        runCatching { radioApi.getPhStations(20) }.getOrNull()
+                    }.orEmpty()
+                }
 
                 initialLoadJob?.join()
                 val currentState = _uiState.value
                 val history = withContext(Dispatchers.IO) { store.loadHistory() }
+                val importedYouTube = withContext(Dispatchers.IO) { store.getImportedYouTubeTracks() }
                 val madeForYouDef = async {
                     runCatching {
                         recommendationEngine.buildMadeForYou(
@@ -1359,40 +1840,74 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     }.getOrDefault(emptyList())
                 }
 
-                val phTopTracks = phTopDef.await().filter(::isNonPreviewCatalogTrack)
-                val opmTracks = opmDef.await().filter(::isNonPreviewCatalogTrack)
-                val globalTopTracks = globalTopDef.await().filter(::isNonPreviewCatalogTrack)
-                val phArtists = phArtistsDef.await()
-                val globalArtists = globalArtistsDef.await()
+                val phTopTracks = RegionalContentFilter.filterTracks(phTopDef.await())
+                    .filter(::isNonPreviewCatalogTrack)
+                val opmTracks = RegionalContentFilter.filterTracks(opmDef.await())
+                    .filter(::isNonPreviewCatalogTrack)
+                val globalTopTracks = RegionalContentFilter.filterTracks(globalTopDef.await())
+                    .filter(::isNonPreviewCatalogTrack)
+                val remoteMusicVideos = RegionalContentFilter.filterTracks(musicVideosDef.await())
+                    .filter(::isNonPreviewCatalogTrack)
+                val combinedMusicVideos = mergeMusicVideoLists(importedYouTube, remoteMusicVideos)
+                val phArtists = RegionalContentFilter.filterArtists(phArtistsDef.await())
+                val globalArtists = RegionalContentFilter.filterArtists(globalArtistsDef.await())
                 val playlists = playlistsDef.await()
-                val podcasts = podcastsDef.await()
-                val audiobooks = audiobooksDef.await()
-                val liveRadio = radioDef.await()
-                val madeForYou = madeForYouDef.await()
+                val podcasts = podcastsDef.await().filterNot {
+                    RegionalContentFilter.isExcludedIndianContent(
+                        title = it.title,
+                        artist = it.author,
+                        genre = it.genre
+                    )
+                }
+                val audiobooks = audiobooksDef.await().filterNot {
+                    RegionalContentFilter.isExcludedIndianContent(
+                        title = it.title,
+                        artist = it.author
+                    )
+                }
+                val liveRadio = RegionalContentFilter.filterTracks(radioDef.await())
+                val madeForYou = madeForYouDef.await().map { pl ->
+                    pl.copy(tracks = RegionalContentFilter.filterTracks(pl.tracks))
+                }
 
                 val selectedGenre = _uiState.value.home.selectedGenre
                 val genreTracks = when {
                     selectedGenre.equals("All", ignoreCase = true) -> phTopTracks
                     selectedGenre.equals("OPM", ignoreCase = true) -> opmTracks
-                    else -> runCatching { catalogApi.getGenreTracks(selectedGenre, limit = 30) }
-                        .getOrDefault(emptyList())
-                        .filter(::isNonPreviewCatalogTrack)
+                    else -> RegionalContentFilter.filterTracks(
+                        runCatching { catalogApi.getGenreTracks(selectedGenre, limit = 30) }
+                            .getOrDefault(emptyList())
+                    ).filter(::isNonPreviewCatalogTrack)
                 }
 
                 val latestState = _uiState.value
-                val catalogPool = (phTopTracks + opmTracks + globalTopTracks).distinctBy { it.id }
-                val hydratedRecent = latestState.home.recentlyPlayed.map { hydrateTrackFromCatalog(it, catalogPool) }
-                val hydratedLiked = latestState.library.likedSongs.map { hydrateTrackFromCatalog(it, catalogPool) }
-                val quickPicks = buildVerifiedQuickPicks(
-                    recentTracks = hydratedRecent,
-                    likedTracks = hydratedLiked,
-                    phTopTracks = phTopTracks,
-                    globalTopTracks = globalTopTracks
+                val effectivePhTop = phTopTracks.ifEmpty { latestState.home.phTopTracks }
+                val effectiveOpm = opmTracks.ifEmpty { latestState.home.opmTracks }
+                val effectiveGlobalTop = globalTopTracks.ifEmpty { latestState.home.globalTopTracks }
+                val effectivePhArtists = phArtists.ifEmpty { latestState.home.phArtists }
+                val effectiveGlobalArtists = globalArtists.ifEmpty { latestState.home.globalArtists }
+                val effectiveMvs = combinedMusicVideos.ifEmpty { latestState.home.musicVideos }
+                val catalogPool = (effectivePhTop + effectiveOpm + effectiveGlobalTop + effectiveMvs)
+                    .distinctBy { it.id }
+                val hydratedRecent = RegionalContentFilter.filterTracks(
+                    latestState.home.recentlyPlayed.map { hydrateTrackFromCatalog(it, catalogPool) }
+                )
+                val hydratedLiked = RegionalContentFilter.filterTracks(
+                    latestState.library.likedSongs.map { hydrateTrackFromCatalog(it, catalogPool) }
+                )
+                val quickPicks = RegionalContentFilter.filterTracks(
+                    buildVerifiedQuickPicks(
+                        recentTracks = hydratedRecent,
+                        likedTracks = hydratedLiked,
+                        phTopTracks = effectivePhTop,
+                        globalTopTracks = effectiveGlobalTop
+                    )
                 )
 
                 val allRemoteEmpty = phTopTracks.isEmpty() &&
                     opmTracks.isEmpty() &&
                     globalTopTracks.isEmpty() &&
+                    remoteMusicVideos.isEmpty() &&
                     playlists.isEmpty() &&
                     podcasts.isEmpty() &&
                     liveRadio.isEmpty()
@@ -1401,22 +1916,23 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     state.copy(
                         home = state.home.copy(
                             isLoading = false,
-                            isOffline = offlineNow || allRemoteEmpty,
+                            isOffline = offlineNow || (allRemoteEmpty && effectivePhTop.isEmpty()),
                             quickPicks = quickPicks,
                             madeForYou = madeForYou,
-                            phTopTracks = phTopTracks,
-                            opmTracks = opmTracks,
-                            phArtists = phArtists,
-                            globalTopTracks = globalTopTracks,
-                            globalArtists = globalArtists,
-                            trendingTracks = phTopTracks,
-                            genreTracks = genreTracks,
+                            phTopTracks = effectivePhTop,
+                            opmTracks = effectiveOpm,
+                            phArtists = effectivePhArtists,
+                            globalTopTracks = effectiveGlobalTop,
+                            globalArtists = effectiveGlobalArtists,
+                            trendingTracks = effectivePhTop,
+                            genreTracks = genreTracks.ifEmpty { state.home.genreTracks },
                             trendingPlaylists = playlists,
                             podcasts = podcasts,
                             audiobooks = audiobooks,
                             liveRadio = liveRadio,
                             recentlyPlayed = hydratedRecent,
-                            errorMessage = if (allRemoteEmpty) "Offline mode — saved downloads & local tracks ready" else null
+                            musicVideos = effectiveMvs,
+                            errorMessage = if (allRemoteEmpty && effectivePhTop.isEmpty()) "Offline mode — saved downloads & local tracks ready" else null
                         ),
                         library = state.library.copy(likedSongs = hydratedLiked)
                     )
@@ -1431,10 +1947,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
         preWarmJob?.cancel()
         val targets = quickPicks
             .filter {
-                it.streamUrl.isBlank() ||
-                    QueueEngine.isThirtySecondPreviewUrl(it.streamUrl) ||
-                    it.source == TrackSource.DEEZER ||
-                    it.source == TrackSource.ITUNES
+                !it.isVideoOnly &&
+                    (it.streamUrl.isBlank() ||
+                        QueueEngine.isThirtySecondPreviewUrl(it.streamUrl) ||
+                        it.source == TrackSource.DEEZER ||
+                        it.source == TrackSource.ITUNES)
             }
             .take(6)
         if (targets.isEmpty()) return
@@ -1488,7 +2005,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
     private fun hydrateTrackFromCatalog(track: Track, catalogPool: List<Track>): Track {
         val clean = sanitizeTrack(track)
         val byId = catalogPool.firstOrNull { it.id == clean.id }
-        if (byId != null && isVerifiedFullTrack(byId)) return byId
+        if (byId != null && (isVerifiedFullTrack(byId) || byId.isVideoOnly)) return byId
 
         val normTitle = clean.title.trim().lowercase()
         val normArtist = clean.artist.trim().lowercase()
@@ -1498,11 +2015,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application),
                     candidate.artist.trim().lowercase().contains(normArtist) ||
                     normArtist.contains(candidate.artist.trim().lowercase()))
         }
-        return if (byMeta != null && isVerifiedFullTrack(byMeta)) byMeta else clean
+        return if (byMeta != null && (isVerifiedFullTrack(byMeta) || byMeta.isVideoOnly)) byMeta else clean
     }
 
     private fun isNonPreviewCatalogTrack(track: Track): Boolean {
-        return !track.isPreviewOnly && !QueueEngine.isThirtySecondPreviewUrl(track.streamUrl)
+        return !track.isPreviewOnly &&
+            !QueueEngine.isThirtySecondPreviewUrl(track.streamUrl) &&
+            !RegionalContentFilter.isExcludedTrack(track)
     }
 
     private fun isVerifiedFullTrack(track: Track): Boolean {

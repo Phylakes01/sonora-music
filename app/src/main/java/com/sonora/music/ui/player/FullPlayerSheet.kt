@@ -1,5 +1,8 @@
 package com.sonora.music.ui.player
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -11,6 +14,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +25,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -35,6 +40,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -44,6 +50,8 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -59,7 +67,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -136,8 +146,11 @@ fun FullPlayerSheet(
     val isLiked = track.id in state.likedTrackIds
     val activeDevice = state.outputDevices.firstOrNull { it.isActive }
     val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val hasMusicVideo = track.hasMusicVideo || track.youtubeVideoId.isNotBlank()
+    val isVideoActive = state.isVideoMode && track.youtubeVideoId.isNotBlank()
 
     val accentColor by animateColorAsState(
         targetValue = state.dominantAccent,
@@ -257,10 +270,12 @@ fun FullPlayerSheet(
     val displayPositionMs = pendingSeekMs?.toLong()
         ?: playback.positionMs.coerceIn(0L, durationMs.coerceAtLeast(1L))
 
-    val contextSubtitle = remember(track, downloadState?.status) {
+    val contextSubtitle = remember(track, downloadState?.status, isVideoActive) {
         when {
+            isVideoActive -> "Official Music Video"
             downloadState?.status == DownloadStatus.DOWNLOADED -> "Offline Downloads"
             track.isLive || track.source == TrackSource.RADIO -> "Live Radio"
+            track.source == TrackSource.YOUTUBE -> "Official Music Video"
             track.source == TrackSource.PODCAST -> "Podcast"
             track.source == TrackSource.AUDIOBOOK -> "Audiobook"
             track.source == TrackSource.LOCAL -> "Local Files"
@@ -387,34 +402,135 @@ fun FullPlayerSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            if (hasMusicVideo) {
+                Spacer(modifier = Modifier.height(10.dp))
+                SongVideoModeToggle(
+                    isVideoMode = isVideoActive,
+                    onSelectMode = { videoSelected ->
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        actions.onSetVideoMode(videoSelected)
+                    }
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+            } else {
+                Spacer(modifier = Modifier.height(18.dp))
+            }
 
-            // Breathing square rounded-14dp artwork with soft elevation shadow
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                val artSize = minOf(maxWidth, 340.dp)
-                Box(
-                    modifier = Modifier
-                        .size(artSize)
-                        .graphicsLayer {
-                            scaleX = artworkScale
-                            scaleY = artworkScale
-                        }
-                        .shadow(
-                            elevation = artworkElevation,
-                            shape = RoundedCornerShape(14.dp),
-                            ambientColor = Color.Black,
-                            spotColor = Color.Black
-                        )
+            if (isVideoActive) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    SonoraArtwork(
-                        artworkUrl = track.artworkUrl,
-                        title = track.title,
-                        cornerRadius = 14.dp,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .shadow(
+                                elevation = 20.dp,
+                                shape = RoundedCornerShape(14.dp),
+                                ambientColor = Color.Black,
+                                spotColor = Color.Black
+                            )
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    ) {
+                        YouTubeVideoPlayer(
+                            videoId = track.youtubeVideoId,
+                            title = track.title,
+                            artist = track.displayArtist,
+                            onVideoEnded = { actions.skipNext() },
+                            onFallbackOpenExternal = { url -> openExternalYoutubeUrl(context, url) },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = Color(0xFF1F1F26),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.OndemandVideo,
+                                    contentDescription = null,
+                                    tint = EmeraldAccent,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = if (track.isVideoOnly) "Official MV" else "Hybrid MV",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = Color(0xFF22222A),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .clickable { actions.openFullTrackExternal(track) }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                    contentDescription = null,
+                                    tint = TextPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Watch on YouTube",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Breathing square rounded-14dp artwork with soft elevation shadow
+                BoxWithConstraints(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val artSize = minOf(maxWidth, 340.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(artSize)
+                            .graphicsLayer {
+                                scaleX = artworkScale
+                                scaleY = artworkScale
+                            }
+                            .shadow(
+                                elevation = artworkElevation,
+                                shape = RoundedCornerShape(14.dp),
+                                ambientColor = Color.Black,
+                                spotColor = Color.Black
+                            )
+                    ) {
+                        SonoraArtwork(
+                            artworkUrl = track.artworkUrl,
+                            title = track.title,
+                            cornerRadius = 14.dp,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
 
@@ -493,85 +609,87 @@ fun FullPlayerSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Clean SonoraSlimSlider + crisp tabular-nums timestamps (or LIVE indicator)
-            if (track.isLive) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(CoralHeart)
-                    )
-                    Text(
-                        text = "LIVE",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
-                        ),
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Live radio broadcast",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
-            } else {
-                val safeMax = durationMs.coerceAtLeast(1L).toFloat()
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    SonoraSlimSlider(
-                        value = displayPositionMs.toFloat().coerceIn(0f, safeMax),
-                        onValueChange = { value -> pendingSeekMs = value },
-                        valueRange = 0f..safeMax,
-                        activeColor = Color.White,
-                        inactiveColor = Color(0xFF4D4D4D),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
+            if (!isVideoActive) {
+                // Clean SonoraSlimSlider + crisp tabular-nums timestamps (or LIVE indicator)
+                if (track.isLive) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(CoralHeart)
+                        )
                         Text(
-                            text = formatMs(displayPositionMs),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFeatureSettings = "tnum"
+                            text = "LIVE",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
                             ),
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Live radio broadcast",
+                            style = MaterialTheme.typography.bodyMedium,
                             color = TextSecondary
                         )
-                        val remainingMs = (durationMs - displayPositionMs).coerceAtLeast(0L)
-                        Text(
-                            text = if (showRemainingTime) {
-                                "-${formatMs(remainingMs)}"
-                            } else {
-                                formatMs(durationMs)
-                            },
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFeatureSettings = "tnum"
-                            ),
-                            color = TextMuted,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { showRemainingTime = !showRemainingTime }
-                                .padding(horizontal = 2.dp, vertical = 1.dp)
+                    }
+                } else {
+                    val safeMax = durationMs.coerceAtLeast(1L).toFloat()
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        SonoraSlimSlider(
+                            value = displayPositionMs.toFloat().coerceIn(0f, safeMax),
+                            onValueChange = { value -> pendingSeekMs = value },
+                            valueRange = 0f..safeMax,
+                            activeColor = Color.White,
+                            inactiveColor = Color(0xFF4D4D4D),
+                            modifier = Modifier.fillMaxWidth()
                         )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = formatMs(displayPositionMs),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                color = TextSecondary
+                            )
+                            val remainingMs = (durationMs - displayPositionMs).coerceAtLeast(0L)
+                            Text(
+                                text = if (showRemainingTime) {
+                                    "-${formatMs(remainingMs)}"
+                                } else {
+                                    formatMs(durationMs)
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                color = TextMuted,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { showRemainingTime = !showRemainingTime }
+                                    .padding(horizontal = 2.dp, vertical = 1.dp)
+                            )
+                        }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(14.dp))
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Classic transport bar: 3-state Shuffle, Prev, Crisp White 66.dp Play/Pause, Next, Repeat
+            // Classic transport bar: 3-state Shuffle, Prev, Play/Pause (or Video Queue pill), Next, Repeat
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -631,32 +749,72 @@ fun FullPlayerSheet(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(66.dp)
-                        .scale(playScale)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .clickable {
-                            playBounce = true
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            actions.togglePlayPause()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (playback.isBuffering) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(58.dp),
-                            color = Color.Black.copy(alpha = 0.65f),
-                            strokeWidth = 2.5.dp
+                if (isVideoActive) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color(0xFF23232B),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                        modifier = Modifier
+                            .height(46.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable(enabled = !track.isVideoOnly) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                actions.onSetVideoMode(false)
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (track.isVideoOnly) {
+                                    Icons.Rounded.OndemandVideo
+                                } else {
+                                    Icons.Rounded.MusicNote
+                                },
+                                contentDescription = null,
+                                tint = EmeraldAccent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = if (track.isVideoOnly) "In-App Video" else "Switch to Audio",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(66.dp)
+                            .scale(playScale)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .clickable {
+                                playBounce = true
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                actions.togglePlayPause()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (playback.isBuffering) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(58.dp),
+                                color = Color.Black.copy(alpha = 0.65f),
+                                strokeWidth = 2.5.dp
+                            )
+                        }
+                        Icon(
+                            imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (playback.isPlaying) "Pause" else "Play",
+                            tint = Color.Black,
+                            modifier = Modifier.size(34.dp)
                         )
                     }
-                    Icon(
-                        imageVector = if (playback.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playback.isPlaying) "Pause" else "Play",
-                        tint = Color.Black,
-                        modifier = Modifier.size(34.dp)
-                    )
                 }
 
                 IconButton(
@@ -1032,4 +1190,90 @@ private fun formatMs(ms: Long): String {
     } else {
         "%d:%02d".format(minutes, seconds)
     }
+}
+
+@Composable
+private fun SongVideoModeToggle(
+    isVideoMode: Boolean,
+    onSelectMode: (Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = Color(0xFF1E1E24).copy(alpha = 0.92f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.10f))
+    ) {
+        Row(
+            modifier = Modifier.padding(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            val songBg by animateColorAsState(
+                targetValue = if (!isVideoMode) Color(0xFF34343D) else Color.Transparent,
+                animationSpec = tween(durationMillis = 180),
+                label = "song_pill_bg"
+            )
+            val videoBg by animateColorAsState(
+                targetValue = if (isVideoMode) Color(0xFF34343D) else Color.Transparent,
+                animationSpec = tween(durationMillis = 180),
+                label = "video_pill_bg"
+            )
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(songBg)
+                    .clickable { onSelectMode(false) }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = if (!isVideoMode) Color.White else TextSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = "Song",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 12.5.sp,
+                        fontWeight = if (!isVideoMode) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    color = if (!isVideoMode) Color.White else TextSecondary
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(videoBg)
+                    .clickable { onSelectMode(true) }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OndemandVideo,
+                    contentDescription = null,
+                    tint = if (isVideoMode) EmeraldAccent else TextSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+                Text(
+                    text = "Video",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontSize = 12.5.sp,
+                        fontWeight = if (isVideoMode) FontWeight.Bold else FontWeight.Medium
+                    ),
+                    color = if (isVideoMode) Color.White else TextSecondary
+                )
+            }
+        }
+    }
+}
+
+private fun openExternalYoutubeUrl(context: Context, url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching { context.startActivity(intent) }
 }

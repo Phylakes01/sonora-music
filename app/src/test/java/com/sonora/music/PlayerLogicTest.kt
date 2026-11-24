@@ -1,12 +1,16 @@
 package com.sonora.music
 
+import com.sonora.music.model.PlaybackState
 import com.sonora.music.model.RepeatMode
 import com.sonora.music.model.ShuffleMode
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
 import com.sonora.music.player.AudioEffectsManager
 import com.sonora.music.player.QueueEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -194,5 +198,140 @@ class PlayerLogicTest {
         assertTrue(QueueEngine.isThirtySecondPreviewUrl("https://itunes.apple.com/sound/preview.m4a"))
         assertFalse(QueueEngine.isThirtySecondPreviewUrl("https://api.audius.co/v1/tracks/J8x61Zk/stream?app_name=Sonora"))
         assertFalse(QueueEngine.isThirtySecondPreviewUrl(""))
+    }
+
+    @Test
+    fun trackVideoModeState_distinguishesVideoOnlyHybridAndAudioOnly() {
+        val videoOnly = Track(
+            id = "yt_S7BKWs2Tirg",
+            title = "Mahal Magmahal",
+            artist = "Esremborak",
+            durationSec = 248,
+            streamUrl = "",
+            source = TrackSource.YOUTUBE,
+            isPreviewOnly = false,
+            youtubeVideoId = "S7BKWs2Tirg",
+            hasMusicVideo = true
+        )
+        val hybrid = Track(
+            id = "aud_oWarYJg",
+            title = "Na Para Bang",
+            artist = "Mariah Deborah",
+            durationSec = 224,
+            streamUrl = "https://api.audius.co/v1/tracks/oWarYJg/stream?app_name=Sonora",
+            source = TrackSource.AUDIUS,
+            isPreviewOnly = false,
+            youtubeVideoId = "Y5z_4utl678",
+            hasMusicVideo = true
+        )
+        val audioOnly = Track(
+            id = "aud_J8x61Zk",
+            title = "Blinding Lights",
+            artist = "The Weeknd",
+            durationSec = 202,
+            streamUrl = "https://api.audius.co/v1/tracks/J8x61Zk/stream?app_name=Sonora",
+            source = TrackSource.AUDIUS,
+            isPreviewOnly = false
+        )
+
+        assertTrue(videoOnly.isVideoOnly)
+        assertTrue(videoOnly.hasMusicVideo)
+        assertEquals("VIDEO", TrackSource.YOUTUBE.badgeLabel)
+        assertEquals("https://www.youtube.com/watch?v=S7BKWs2Tirg", videoOnly.effectiveYoutubeUrl)
+        assertTrue(QueueEngine.isVideoOnlyTrack(videoOnly))
+        assertFalse(QueueEngine.shouldPlayWithExoPlayer(videoOnly))
+
+        assertFalse(hybrid.isVideoOnly)
+        assertTrue(hybrid.hasMusicVideo)
+        assertEquals("https://www.youtube.com/watch?v=Y5z_4utl678", hybrid.effectiveYoutubeUrl)
+        assertFalse(QueueEngine.isVideoOnlyTrack(hybrid))
+        assertTrue(QueueEngine.shouldPlayWithExoPlayer(hybrid))
+
+        assertFalse(audioOnly.isVideoOnly)
+        assertFalse(audioOnly.hasMusicVideo)
+        assertEquals("", audioOnly.effectiveYoutubeUrl)
+        assertTrue(QueueEngine.shouldPlayWithExoPlayer(audioOnly))
+    }
+
+    @Test
+    fun queueTransitionOntoVideoOnlyTrack_updatesStateCleanlyWithoutExoPlayerError() {
+        val audioTrack = Track(
+            id = "aud_1",
+            title = "Multo",
+            artist = "Cup of Joe",
+            durationSec = 240,
+            streamUrl = "https://api.audius.co/v1/tracks/multo/stream?app_name=Sonora",
+            source = TrackSource.AUDIUS
+        )
+        val mvOnlyTrack = Track(
+            id = "yt_S7BKWs2Tirg",
+            title = "Mahal Magmahal",
+            artist = "Esremborak",
+            durationSec = 248,
+            streamUrl = "",
+            source = TrackSource.YOUTUBE,
+            youtubeVideoId = "S7BKWs2Tirg",
+            hasMusicVideo = true
+        )
+        val hybridTrack = Track(
+            id = "aud_2",
+            title = "Na Para Bang",
+            artist = "Mariah Deborah",
+            durationSec = 224,
+            streamUrl = "https://api.audius.co/v1/tracks/oWarYJg/stream?app_name=Sonora",
+            source = TrackSource.AUDIUS,
+            youtubeVideoId = "Y5z_4utl678",
+            hasMusicVideo = true
+        )
+
+        val queue = listOf(audioTrack, mvOnlyTrack, hybridTrack)
+        val prevState = PlaybackState(
+            currentTrack = audioTrack,
+            queue = queue,
+            currentIndex = 0,
+            isPlaying = true,
+            isBuffering = true,
+            positionMs = 45_000L,
+            durationMs = 240_000L,
+            errorMessage = "transient network hiccup"
+        )
+
+        val nextIdx = QueueEngine.resolveNextQueueIndex(0, queue.size, RepeatMode.OFF)
+        assertEquals(1, nextIdx)
+        val nextTrack = queue[nextIdx!!]
+        assertFalse(QueueEngine.shouldPlayWithExoPlayer(nextTrack))
+
+        val transitioned = QueueEngine.computeVideoTransitionState(prevState, queue, nextIdx)
+        assertNotNull(transitioned)
+        assertEquals(mvOnlyTrack.id, transitioned!!.currentTrack?.id)
+        assertEquals(1, transitioned.currentIndex)
+        assertEquals(queue, transitioned.queue)
+        assertTrue(transitioned.isPlaying)
+        assertFalse(transitioned.isBuffering)
+        assertEquals(0L, transitioned.positionMs)
+        assertEquals(248_000L, transitioned.durationMs)
+        assertNull(transitioned.errorMessage)
+
+        assertEquals(0, QueueEngine.resolveNextQueueIndex(2, queue.size, RepeatMode.ALL))
+        assertEquals(2, QueueEngine.resolvePrevQueueIndex(0, queue.size, RepeatMode.ALL))
+        assertNull(QueueEngine.resolveNextQueueIndex(2, queue.size, RepeatMode.OFF))
+        assertNull(QueueEngine.resolvePrevQueueIndex(0, queue.size, RepeatMode.OFF))
+    }
+
+    @Test
+    fun zeroPreviewEnforcement_rejectsPreviewUrlsAndAllowsFullLengthStreams() {
+        val previewStub = Track(
+            id = "dz_123",
+            title = "Preview Stub",
+            artist = "Artist",
+            durationSec = 30,
+            streamUrl = "https://cdns-preview-e.dzcdn.net/stream/c-123.mp3",
+            source = TrackSource.DEEZER
+        )
+        assertFalse(QueueEngine.isPlayableFullStreamUrl(previewStub.streamUrl))
+        assertFalse(QueueEngine.shouldPlayWithExoPlayer(previewStub))
+        assertFalse(QueueEngine.isPlayableFullStreamUrl("https://audio-ssl.itunes.apple.com/itunes-assets/test.m4a"))
+        assertFalse(QueueEngine.isPlayableFullStreamUrl(""))
+        assertTrue(QueueEngine.isPlayableFullStreamUrl("https://api.audius.co/v1/tracks/oWarYJg/stream?app_name=Sonora"))
     }
 }

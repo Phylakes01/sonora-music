@@ -8,7 +8,10 @@ import com.sonora.music.data.network.LyricsApi
 import com.sonora.music.data.network.MusicCatalogApi
 import com.sonora.music.data.network.PodcastApi
 import com.sonora.music.data.network.RadioApi
+import com.sonora.music.data.network.RegionalContentFilter
+import com.sonora.music.data.network.YouTubeCatalogApi
 import com.sonora.music.data.repository.RecommendationEngine
+import com.sonora.music.model.Artist
 import com.sonora.music.model.Audiobook
 import com.sonora.music.model.AudioSettings
 import com.sonora.music.model.EqPreset
@@ -220,6 +223,48 @@ class DataLayerTest {
         assertEquals(1500, history.size)
         assertEquals("t_6", history.first().trackId)
         assertEquals("t_1505", history.last().trackId)
+
+        // YouTube MV fields + imported YouTube tracks persistence & regional/preview sanitization
+        val hybridTrack = sampleTrack.copy(
+            youtubeVideoId = "Rht8rS4cR1s",
+            hasMusicVideo = true
+        )
+        val videoOnlyTrack = Track(
+            id = "yt_S7BKWs2Tirg",
+            title = "Mahal Magmahal",
+            artist = "Esremborak",
+            genre = "OPM",
+            durationSec = 248,
+            artworkUrl = "https://i.ytimg.com/vi/S7BKWs2Tirg/hqdefault.jpg",
+            streamUrl = "",
+            source = TrackSource.YOUTUBE,
+            externalUrl = "https://www.youtube.com/watch?v=S7BKWs2Tirg",
+            isPreviewOnly = false,
+            youtubeVideoId = "S7BKWs2Tirg",
+            hasMusicVideo = true
+        )
+        assertFalse(hybridTrack.isVideoOnly)
+        assertTrue(videoOnlyTrack.isVideoOnly)
+        assertEquals("VIDEO", TrackSource.YOUTUBE.badgeLabel)
+        assertEquals("https://www.youtube.com/watch?v=S7BKWs2Tirg", videoOnlyTrack.effectiveYoutubeUrl)
+
+        val excludedIndianTrack = Track(
+            id = "yt_ind123",
+            title = "Kesariya",
+            artist = "Arijit Singh",
+            genre = "Bollywood",
+            durationSec = 210,
+            source = TrackSource.YOUTUBE,
+            youtubeVideoId = "BddP6PYo2gs",
+            hasMusicVideo = true
+        )
+        store.saveImportedYouTubeTracks(listOf(videoOnlyTrack, hybridTrack, excludedIndianTrack))
+        val loadedImportedVideos = store.getImportedYouTubeTracks()
+        assertEquals(2, loadedImportedVideos.size)
+        assertEquals("S7BKWs2Tirg", loadedImportedVideos[0].youtubeVideoId)
+        assertTrue(loadedImportedVideos[0].hasMusicVideo)
+        assertEquals("Rht8rS4cR1s", loadedImportedVideos[1].youtubeVideoId)
+        assertTrue(loadedImportedVideos[1].hasMusicVideo)
     }
 
     @Test
@@ -424,6 +469,9 @@ class DataLayerTest {
         assertTrue(phTop.size >= 17)
         assertTrue(phTop.any { it.title == "Raining in Manila" && it.durationSec == 336 })
         assertTrue(phTop.any { it.title == "Malaya" && it.durationSec == 270 })
+        assertTrue(phTop.any { it.title == "Na Para Bang" && it.artist == "Mariah Deborah" && it.durationSec == 224 && it.youtubeVideoId == "Y5z_4utl678" && it.hasMusicVideo })
+        assertTrue(phTop.any { it.title == "Tibok" && it.artist == "Earl Agustin" && it.durationSec == 327 && it.youtubeVideoId == "oiAtAzFLDfE" && it.hasMusicVideo })
+        assertTrue(phTop.first { it.title == "Multo" }.hasMusicVideo)
         // Extra resolved live non-seed hit
         assertTrue(phTop.any { it.title == "Bulong" && it.durationSec == 275 })
 
@@ -433,9 +481,10 @@ class DataLayerTest {
 
         val globalTop = api.getGlobalTopTracks(limit = 40)
         assertAllFullLength(globalTop, "getGlobalTopTracks")
-        assertTrue(globalTop.size >= 29)
-        assertTrue(globalTop.any { it.title == "Die With A Smile" && it.durationSec == 249 })
-        assertTrue(globalTop.any { it.title == "Starboy" && it.durationSec == 273 })
+        assertTrue(globalTop.size >= 30)
+        assertTrue(globalTop.any { it.title == "Die With A Smile" && it.durationSec == 249 && it.youtubeVideoId == "kPa7bsKwL-c" })
+        assertTrue(globalTop.any { it.title == "Starboy" && it.durationSec == 273 && it.youtubeVideoId == "34Na4j8AVgA" })
+        assertTrue(globalTop.any { it.title == "Golden" && it.artist == "HUNTR/X" && it.durationSec == 192 })
         assertTrue(globalTop.any { it.title == "Birds of a Feather" && it.durationSec == 230 })
         assertTrue(globalTop.any { it.title == "Not Like Us" && it.durationSec == 273 })
         assertTrue(globalTop.any { it.title == "Call Out My Name" && it.durationSec == 227 })
@@ -494,6 +543,13 @@ class DataLayerTest {
         )
         val searchMultoTypeBeat = api.searchTracks("Multo Type Beat", limit = 15)
         assertTrue(searchMultoTypeBeat.any { it.title == "Multo (Type Beat)" })
+
+        // Spelling alias "maria deborah" resolves "Mariah Deborah"
+        val searchMaria = api.searchTracks("maria deborah", limit = 15)
+        assertTrue(searchMaria.any { it.title == "Na Para Bang" && it.artist == "Mariah Deborah" && it.youtubeVideoId == "Y5z_4utl678" })
+
+        // Excluded Indian search returns empty
+        assertTrue(api.searchTracks("Arijit Singh", limit = 15).isEmpty())
 
         // 6. searchArtists sorts by highest nb_fan descending
         val artists = api.searchArtists("bini", limit = 10)
@@ -1659,5 +1715,230 @@ class DataLayerTest {
                     .build()
             })
             .build()
+    }
+
+    @Test
+    fun regionalContentFilter_blocksIndianBollywoodWhileAllowingOpmAndGlobalIndie() {
+        // Indic Unicode script blocks
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "तुम ही हो", artist = "Unknown"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "தமிழ் பாடல்", artist = "Unknown"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "ਪੰਜਾਬੀ ਗੀਤ", artist = "Unknown"))
+
+        // Excluded genres, labels, artists & Bollywood/Ed-Sheeran collabs
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Random Song", genre = "Bollywood"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Random Song", genre = "Hindi Pop"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Track", genre = "Punjabi"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Track", genre = "Tamil"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Song", artist = "T-Series"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Kesariya", artist = "Arijit Singh"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Tauba Tauba", artist = "Karan Aujla"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Sapphire (feat. Shah Rukh Khan)", artist = "Ed Sheeran"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Sapphire", artist = "Ed Sheeran, Arijit Singh"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Mirchi", artist = "DIVINE"))
+        assertTrue(RegionalContentFilter.isExcludedIndianContent(title = "Mirchi", artist = " divine "))
+
+        // Allowed OPM, P-Pop, Global & Indie content (including "divine" in song titles)
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Na Para Bang", artist = "Mariah Deborah", genre = "OPM"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Mahal Magmahal", artist = "Esremborak", genre = "OPM"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Pantropiko", artist = "BINI", genre = "P-Pop"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Golden", artist = "HUNTR/X", genre = "Indie Pop"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Indiana", artist = "Indie Band", genre = "Indie"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "Divine Mercy", artist = "Hillsong", genre = "Pop"))
+        assertFalse(RegionalContentFilter.isExcludedIndianContent(title = "A Divine Feeling", artist = "The Weeknd", genre = "R&B"))
+
+        val mixedTracks = listOf(
+            Track(id = "ok_1", title = "Na Para Bang", artist = "Mariah Deborah", genre = "OPM"),
+            Track(id = "bad_1", title = "Tum Hi Ho", artist = "Arijit Singh", genre = "Bollywood"),
+            Track(id = "bad_2", title = "Sapphire", artist = "Ed Sheeran", mood = "Shah Rukh Khan"),
+            Track(id = "ok_2", title = "Mahal Magmahal", artist = "Esremborak", genre = "OPM")
+        )
+        val filteredTracks = RegionalContentFilter.filterTracks(mixedTracks)
+        assertEquals(listOf("ok_1", "ok_2"), filteredTracks.map { it.id })
+
+        val mixedArtists = listOf(
+            Artist(id = "a1", name = "Esremborak", bio = "OPM"),
+            Artist(id = "a2", name = "Arijit Singh", bio = "Bollywood"),
+            Artist(id = "a3", name = "Divine", bio = "Indian Rap"),
+            Artist(id = "a4", name = "BINI", bio = "P-Pop")
+        )
+        val filteredArtists = RegionalContentFilter.filterArtists(mixedArtists)
+        assertEquals(listOf("Esremborak", "BINI"), filteredArtists.map { it.name })
+    }
+
+    @Test
+    fun youTubeCatalogApi_extractsUrlsAndParsesAtomRssAndCuratedMvs() = runTest {
+        val api = YouTubeCatalogApi(createCatalogMockClient())
+
+        // URL / ID / Handle extraction
+        assertEquals("S7BKWs2Tirg", api.extractVideoId("https://www.youtube.com/watch?v=S7BKWs2Tirg"))
+        assertEquals("Y5z_4utl678", api.extractVideoId("https://youtu.be/Y5z_4utl678?si=abc123"))
+        assertEquals("Zx31bB2vMns", api.extractVideoId("https://www.youtube.com/shorts/Zx31bB2vMns"))
+        assertEquals("4NRXx6U8ABQ", api.extractVideoId("https://www.youtube.com/live/4NRXx6U8ABQ"))
+        assertEquals("ekr2nIex040", api.extractVideoId("https://www.youtube.com/embed/ekr2nIex040"))
+        assertEquals("Rht8rS4cR1s", api.extractVideoId("https://music.youtube.com/watch?v=Rht8rS4cR1s&list=RD123"))
+        assertEquals("S7BKWs2Tirg", api.extractVideoId("S7BKWs2Tirg"))
+        assertEquals("S7BKWs2Tirg", api.extractVideoId("Listen to Esremborak! https://youtu.be/S7BKWs2Tirg?si=share"))
+        assertNull(api.extractVideoId("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"))
+
+        assertEquals(
+            "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+            api.extractPlaylistId("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf")
+        )
+        assertEquals("UCdfq8-581QVUtVsa8ChVnDQ", api.extractChannelId("https://www.youtube.com/channel/UCdfq8-581QVUtVsa8ChVnDQ"))
+        assertEquals("UCdfq8-581QVUtVsa8ChVnDQ", api.extractChannelId("@wish1075"))
+        assertEquals("UCtOcDBKgyr-f50SgbMErFkQ", api.extractChannelId("https://www.youtube.com/@bini_ph/videos"))
+        assertEquals("UC0WP5P-ufpRfjbNrmOWwLBQ", api.extractChannelId("@theweeknd"))
+
+        // Curated MVs & Packs
+        val curated = api.getCuratedMusicVideos()
+        assertEquals(38, curated.size)
+        assertTrue(curated.any { it.artist == "Esremborak" && it.title == "Mahal Magmahal" && it.youtubeVideoId == "S7BKWs2Tirg" })
+        assertTrue(curated.any { it.artist == "Esremborak" && it.title == "Tenchu" && it.youtubeVideoId == "IKB_JIXfuDw" })
+        assertTrue(curated.any { it.artist == "Mariah Deborah" && it.title == "Na Para Bang" && it.youtubeVideoId == "Y5z_4utl678" })
+        assertTrue(curated.any { it.artist == "The Weeknd" && it.title == "Blinding Lights" && it.youtubeVideoId == "4NRXx6U8ABQ" })
+        assertTrue(curated.all {
+            it.source == TrackSource.YOUTUBE &&
+                it.hasMusicVideo &&
+                it.isVideoOnly &&
+                !it.isPreviewOnly &&
+                !RegionalContentFilter.isExcludedTrack(it)
+        })
+
+        val packs = api.getCuratedPacks()
+        assertEquals(listOf("ph_viral", "wish_1075", "global_mvs"), packs.map { it.id })
+        assertTrue(packs.all { it.tracks.isNotEmpty() })
+        assertTrue(api.getPackTracks("ph_viral").any { it.artist == "Esremborak" })
+
+        // Spelling alias search
+        val mariaVideos = api.searchVideos("maria deborah")
+        assertTrue(mariaVideos.any { it.artist == "Mariah Deborah" && it.title == "Na Para Bang" })
+
+        // JVM-safe Atom RSS XML parsing + title cleaning + Indian filtering
+        val sampleAtomXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+              <title>Wish 107.5</title>
+              <entry>
+                <id>yt:video:abcDEF12345</id>
+                <yt:videoId>abcDEF12345</yt:videoId>
+                <title>Sample Band performs "Harana" LIVE on Wish 107.5 Bus</title>
+                <author><name>Wish 107.5</name></author>
+                <published>2026-01-10T00:00:00+00:00</published>
+                <media:group>
+                  <media:thumbnail url="https://i.ytimg.com/vi/abcDEF12345/hqdefault.jpg"/>
+                  <yt:duration seconds="255"/>
+                </media:group>
+              </entry>
+              <entry>
+                <id>yt:video:xyzXYZ98765</id>
+                <yt:videoId>xyzXYZ98765</yt:videoId>
+                <title>"Starlight" - Nova | Wish 107.5 Bus</title>
+                <author><name>Wish 107.5</name></author>
+                <published>2026-01-11T00:00:00+00:00</published>
+              </entry>
+              <entry>
+                <id>yt:video:indIND11111</id>
+                <yt:videoId>indIND11111</yt:videoId>
+                <title>Arijit Singh - Kesariya (Official Video)</title>
+                <author><name>T-Series</name></author>
+              </entry>
+            </feed>
+        """.trimIndent()
+
+        val parsedFeed = api.parseAtomFeedXml(sampleAtomXml, regionHint = "PH", fallbackLabel = "Wish 107.5")
+        assertEquals(1, parsedFeed.excludedCount)
+        assertEquals(2, parsedFeed.tracks.size)
+        assertEquals("Harana", parsedFeed.tracks[0].title)
+        assertEquals("Sample Band", parsedFeed.tracks[0].artist)
+        assertEquals(255, parsedFeed.tracks[0].durationSec)
+        assertEquals(255_000L, parsedFeed.tracks[0].durationMs)
+        assertEquals(TrackSource.YOUTUBE, parsedFeed.tracks[0].source)
+        assertTrue(parsedFeed.tracks[0].hasMusicVideo)
+        assertTrue(parsedFeed.tracks[0].isVideoOnly)
+        assertFalse(parsedFeed.tracks[0].isPreviewOnly)
+        assertEquals("https://i.ytimg.com/vi/abcDEF12345/hqdefault.jpg", parsedFeed.tracks[0].artworkUrl)
+
+        assertEquals("Starlight", parsedFeed.tracks[1].title)
+        assertEquals("Nova", parsedFeed.tracks[1].artist)
+        assertEquals(210, parsedFeed.tracks[1].durationSec)
+        assertEquals(210_000L, parsedFeed.tracks[1].durationMs)
+
+        // Mocked oEmbed + Playlist RSS import
+        val ytMockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                val (code, mime, body) = when {
+                    url.startsWith("https://www.youtube.com/oembed") && url.contains("newVID12345") ->
+                        Triple(
+                            200,
+                            "application/json",
+                            """{"title":"Cup of Joe - Tingin (Official Music Video)","author_name":"Cup of Joe","thumbnail_url":"https://i.ytimg.com/vi/newVID12345/hqdefault.jpg"}"""
+                        )
+                    url.startsWith("https://www.youtube.com/oembed") && url.contains("bollyVID999") ->
+                        Triple(
+                            200,
+                            "application/json",
+                            """{"title":"Tum Hi Ho - Arijit Singh","author_name":"T-Series","thumbnail_url":"https://i.ytimg.com/vi/bollyVID999/hqdefault.jpg"}"""
+                        )
+                    url.startsWith("https://www.youtube.com/feeds/videos.xml?playlist_id=PLtest123456") ->
+                        Triple(200, "application/atom+xml", sampleAtomXml)
+                    else -> Triple(404, "application/json", "{}")
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message(if (code == 200) "OK" else "Not Found")
+                    .body(body.toResponseBody(mime.toMediaType()))
+                    .build()
+            })
+            .build()
+
+        val catalogApi = MusicCatalogApi(ytMockClient)
+        val okImport = catalogApi.importFromYouTube("https://www.youtube.com/watch?v=newVID12345")
+        assertEquals(1, okImport.tracks.size)
+        assertEquals("Tingin", okImport.tracks.first().title)
+        assertEquals("Cup of Joe", okImport.tracks.first().artist)
+        assertEquals(0, okImport.excludedCount)
+
+        val blockedImport = catalogApi.importFromYouTube("https://www.youtube.com/watch?v=bollyVID999")
+        assertTrue(blockedImport.tracks.isEmpty())
+        assertEquals(1, blockedImport.excludedCount)
+
+        val playlistImport = catalogApi.importFromYouTube("https://www.youtube.com/playlist?list=PLtest123456")
+        assertEquals(2, playlistImport.tracks.size)
+        assertEquals(1, playlistImport.excludedCount)
+
+        val combinedVideos = catalogApi.getCombinedMusicVideos()
+        assertTrue(combinedVideos.any { it.artist == "Esremborak" })
+        assertTrue(combinedVideos.any { it.artist == "Mariah Deborah" })
+        assertTrue(combinedVideos.any { it.artist == "The Weeknd" })
+        assertTrue(combinedVideos.none { RegionalContentFilter.isExcludedTrack(it) })
+        assertTrue(combinedVideos.none { it.isPreviewOnly })
+    }
+
+    @Test
+    fun fullAudioResolver_rejectsIndianBollywoodCandidatesAndTracks() = runTest {
+        val resolver = FullAudioResolver(createCatalogMockClient())
+        val bollywoodScore = resolver.scoreCandidate(
+            targetTitle = "Kesariya",
+            targetArtist = "Arijit Singh",
+            targetDurationSec = 268,
+            candidateTitle = "Kesariya - Arijit Singh",
+            candidateUploader = "T-Series",
+            candidateDurationSec = 268,
+            isStreamable = true
+        )
+        assertTrue("Indian/Bollywood candidate must be rejected (< 0): $bollywoodScore", bollywoodScore < 0)
+
+        val excludedTrack = Track(
+            id = "dz_indian_1",
+            title = "Tum Hi Ho",
+            artist = "Arijit Singh",
+            genre = "Bollywood",
+            durationSec = 260
+        )
+        assertNull(resolver.resolveFullTrackOrNull(excludedTrack))
     }
 }

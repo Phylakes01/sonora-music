@@ -74,6 +74,7 @@ import com.sonora.music.ui.components.AddToPlaylistSheet
 import com.sonora.music.ui.components.BottomNavBar
 import com.sonora.music.ui.components.CreatePlaylistDialog
 import com.sonora.music.ui.components.ImportExportPlaylistDialog
+import com.sonora.music.ui.components.ImportYouTubeDialog
 import com.sonora.music.ui.components.OpeningIntroOverlay
 import com.sonora.music.ui.components.SonoraArtwork
 import com.sonora.music.ui.components.TrackActionSheet
@@ -238,12 +239,38 @@ fun SonoraApp(
                             ) {
                                 val currentTrack = uiState.playback.currentTrack
                                 val isLiked = currentTrack != null && currentTrack.id in uiState.likedTrackIds
+                                val miniPlayback = if (currentTrack != null &&
+                                    currentTrack.artworkUrl.isNullOrBlank() &&
+                                    currentTrack.youtubeVideoId.isNotBlank()
+                                ) {
+                                    uiState.playback.copy(
+                                        currentTrack = currentTrack.copy(
+                                            artworkUrl = "https://i.ytimg.com/vi/${currentTrack.youtubeVideoId}/hqdefault.jpg"
+                                        )
+                                    )
+                                } else {
+                                    uiState.playback
+                                }
                                 MiniPlayer(
-                                    playback = uiState.playback,
+                                    playback = miniPlayback,
                                     isLiked = isLiked,
                                     accentColor = uiState.dominantAccent,
-                                    onOpenFullPlayer = viewModel::openFullPlayer,
-                                    onTogglePlayPause = viewModel::togglePlayPause,
+                                    onOpenFullPlayer = {
+                                        if (currentTrack?.isVideoOnly == true && !uiState.isVideoMode) {
+                                            viewModel.onSetVideoMode(true)
+                                        }
+                                        viewModel.openFullPlayer()
+                                    },
+                                    onTogglePlayPause = {
+                                        if (currentTrack?.isVideoOnly == true) {
+                                            if (!uiState.isVideoMode) {
+                                                viewModel.onSetVideoMode(true)
+                                            }
+                                            viewModel.openFullPlayer()
+                                        } else {
+                                            viewModel.togglePlayPause()
+                                        }
+                                    },
                                     onSkipNext = viewModel::skipNext,
                                     onSkipPrev = viewModel::skipPrev,
                                     onToggleLike = {
@@ -381,7 +408,21 @@ fun SonoraApp(
                         )
                     },
                     onShare = { viewModel.shareTrack(track) },
-                    onOpenFullTrack = { viewModel.openFullTrackExternal(track) }
+                    onOpenFullTrack = { viewModel.openFullTrackExternal(track) },
+                    onWatchMusicVideo = if (track.hasMusicVideo || track.youtubeVideoId.isNotBlank()) {
+                        { viewModel.onPlayMusicVideo(track, listOf(track)) }
+                    } else null
+                )
+            }
+
+            // YouTube Import Modal Dialog
+            if (uiState.isImportYouTubeOpen) {
+                ImportYouTubeDialog(
+                    isImporting = uiState.isImportingYouTube,
+                    errorMessage = uiState.youtubeImportError,
+                    onDismiss = viewModel::onCloseImportYouTube,
+                    onImport = viewModel::onImportYouTube,
+                    onImportPack = viewModel::onImportYouTubePack
                 )
             }
 
@@ -474,6 +515,7 @@ fun SonoraApp(
                 } ?: targetPlaylist
                 val candidates = remember(
                     uiState.library.likedSongs,
+                    uiState.home.musicVideos,
                     uiState.home.quickPicks,
                     uiState.home.phTopTracks,
                     uiState.home.opmTracks,
@@ -483,6 +525,7 @@ fun SonoraApp(
                 ) {
                     (
                         uiState.library.likedSongs +
+                            uiState.home.musicVideos +
                             uiState.home.quickPicks +
                             uiState.home.phTopTracks +
                             uiState.home.opmTracks +

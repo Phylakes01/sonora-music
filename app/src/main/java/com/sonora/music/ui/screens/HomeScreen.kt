@@ -35,10 +35,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Icon
@@ -71,10 +73,13 @@ import com.sonora.music.model.PodcastShow
 import com.sonora.music.model.SonoraActions
 import com.sonora.music.model.SonoraUiState
 import com.sonora.music.model.Track
+import com.sonora.music.model.TrackSource
 import com.sonora.music.ui.components.AnimatedPlayingBars
+import com.sonora.music.ui.components.MusicVideoCard
 import com.sonora.music.ui.components.ShimmerCardPlaceholder
 import com.sonora.music.ui.components.ShimmerRowPlaceholder
 import com.sonora.music.ui.components.SonoraArtwork
+import com.sonora.music.ui.components.SonoraBadge
 import com.sonora.music.ui.components.SonoraBrandLogo
 import com.sonora.music.ui.components.SonoraPillChip
 import com.sonora.music.ui.components.SonoraSectionHeader
@@ -88,7 +93,7 @@ import com.sonora.music.ui.theme.ObsidianSurface
 import com.sonora.music.ui.theme.TextPrimary
 import com.sonora.music.ui.theme.TextSecondary
 
-private val HomeTopFilters = listOf("All", "PH Hits", "OPM", "Global", "PH Radio", "Podcasts")
+private val HomeTopFilters = listOf("All", "PH Hits", "OPM", "Global", "Videos", "PH Radio", "Podcasts")
 
 private val HomeGenres = listOf(
     "OPM",
@@ -104,6 +109,23 @@ private val HomeGenres = listOf(
 private val QuickAccessTileBg = Color(0xFF202024)
 private val HeaderButtonBg = Color(0xFF202024)
 private val HeaderButtonBorder = Color(0xFF2B2B30)
+private val YouTubeAccentTint = Color(0xFFFF4E45)
+
+private fun isPhMusicVideo(track: Track): Boolean {
+    val haystack = "${track.genre} ${track.artist} ${track.album} ${track.title}".lowercase()
+    return haystack.contains("opm") ||
+        haystack.contains("p-pop") ||
+        haystack.contains("pinoy") ||
+        haystack.contains("wish 107") ||
+        haystack.contains("esremborak") ||
+        haystack.contains("mariah deborah") ||
+        haystack.contains("cup of joe") ||
+        haystack.contains("bini") ||
+        haystack.contains("dionela") ||
+        haystack.contains("maki") ||
+        haystack.contains("earl agustin") ||
+        haystack.contains("shanti dope")
+}
 
 @Composable
 fun HomeScreen(
@@ -117,6 +139,7 @@ fun HomeScreen(
 
     val isAll = activeFilter.equals("All", ignoreCase = true) ||
         activeFilter.equals("Music", ignoreCase = true)
+    val isVideos = activeFilter.equals("Videos", ignoreCase = true)
     val isPhHits = activeFilter.equals("PH Hits", ignoreCase = true)
     val isOpm = activeFilter.equals("OPM", ignoreCase = true)
     val isGlobal = activeFilter.equals("Global", ignoreCase = true)
@@ -125,6 +148,7 @@ fun HomeScreen(
     val isPodcasts = activeFilter.equals("Podcasts", ignoreCase = true)
 
     val showSpotlightAndQuickGrid = isAll || isPhHits || isOpm || isGlobal
+    val showMusicVideos = isAll || isVideos || isPhHits || isOpm || isGlobal
     val showPhArtists = isAll || isPhHits || isOpm
     val showPhTop = isAll || isPhHits
     val showOpm = isAll || isPhHits || isOpm
@@ -136,6 +160,23 @@ fun HomeScreen(
     val showRecent = isAll || isPhHits || isOpm || isGlobal
 
     val phTopTracks = home.phTopTracks.ifEmpty { home.trendingTracks }
+
+    val displayedMusicVideos = remember(activeFilter, home.musicVideos) {
+        val unique = home.musicVideos.distinctBy { it.id }
+        when {
+            isPhHits || isOpm -> {
+                val ph = unique.filter(::isPhMusicVideo)
+                val other = unique.filterNot(::isPhMusicVideo)
+                (ph + other)
+            }
+            isGlobal -> {
+                val gl = unique.filterNot(::isPhMusicVideo)
+                val ph = unique.filter(::isPhMusicVideo)
+                (gl + ph)
+            }
+            else -> unique
+        }
+    }
 
     val spotlightQueue = remember(activeFilter, phTopTracks, home.opmTracks, home.globalTopTracks, home.quickPicks) {
         when {
@@ -225,6 +266,11 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        item(key = "youtube_import_pill") {
+                            YouTubeImportActionPill(
+                                onClick = { actions.onOpenImportYouTube() }
+                            )
+                        }
                         items(HomeTopFilters, key = { it }) { filter ->
                             SonoraPillChip(
                                 label = filter,
@@ -395,6 +441,108 @@ fun HomeScreen(
                                 }
                                 if (rowTracks.size == 1) {
                                     Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Official Music Videos (PH & Global) — Carousel or Full Feed when "Videos" filter is active
+            if (showMusicVideos) {
+                if (isVideos) {
+                    item(key = "videos_tab_header") {
+                        SonoraSectionHeader(
+                            title = "Official Music Videos (PH & Global)",
+                            subtitle = "${displayedMusicVideos.size} music videos ready to stream",
+                            trailingContent = {
+                                ImportYouTubeMiniChip(onClick = { actions.onOpenImportYouTube() })
+                            },
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                    if (displayedMusicVideos.isEmpty() && !home.isLoading) {
+                        item(key = "videos_empty_card") {
+                            ImportYouTubeBannerCard(
+                                onClick = { actions.onOpenImportYouTube() },
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                        }
+                    } else {
+                        items(displayedMusicVideos, key = { "mv_full_${it.id}" }) { video ->
+                            val isCurrent = state.playback.currentTrack?.id == video.id
+                            MusicVideoCard(
+                                track = video,
+                                isCurrent = isCurrent,
+                                isPlaying = isCurrent && state.playback.isPlaying,
+                                isLiked = video.id in state.likedTrackIds,
+                                onClick = { actions.onPlayMusicVideo(video, home.musicVideos) },
+                                onLikeClick = { actions.toggleLike(video) },
+                                onMoreClick = { onTrackOverflow(video) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                        }
+                    }
+                } else if (displayedMusicVideos.isNotEmpty() || home.isLoading) {
+                    item(key = "official_music_videos") {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            SonoraSectionHeader(
+                                title = "Official Music Videos (PH & Global)",
+                                subtitle = "Esremborak, Mariah Deborah, The Weeknd, BINI & more",
+                                trailingContent = {
+                                    ImportYouTubeMiniChip(onClick = { actions.onOpenImportYouTube() })
+                                },
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            if (displayedMusicVideos.isEmpty()) {
+                                val shimmerBrush = rememberSonoraShimmerBrush()
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(3) {
+                                        Column(
+                                            modifier = Modifier.width(252.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(142.dp)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .background(shimmerBrush)
+                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.7f)
+                                                    .height(13.dp)
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(shimmerBrush)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    items(displayedMusicVideos, key = { "mv_card_${it.id}" }) { video ->
+                                        val isCurrent = state.playback.currentTrack?.id == video.id
+                                        MusicVideoCard(
+                                            track = video,
+                                            isCurrent = isCurrent,
+                                            isPlaying = isCurrent && state.playback.isPlaying,
+                                            isLiked = video.id in state.likedTrackIds,
+                                            onClick = { actions.onPlayMusicVideo(video, home.musicVideos) },
+                                            onLikeClick = { actions.toggleLike(video) },
+                                            onMoreClick = { onTrackOverflow(video) },
+                                            modifier = Modifier.width(252.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1105,6 +1253,15 @@ private fun BorderlessTrackShelfItem(
                     AnimatedPlayingBars(isPlaying = isPlaying, color = EmeraldAccent)
                 }
             }
+            if (track.hasMusicVideo || track.source == TrackSource.YOUTUBE || track.youtubeVideoId.isNotBlank()) {
+                SonoraBadge(
+                    text = "MV",
+                    tint = EmeraldAccent,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(7.dp)
+                )
+            }
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(
@@ -1334,5 +1491,119 @@ private fun BorderlessAudiobookItem(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+@Composable
+private fun YouTubeImportActionPill(
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = Color(0xFF23191B),
+        border = BorderStroke(1.dp, YouTubeAccentTint.copy(alpha = 0.45f)),
+        modifier = Modifier.sonoraPressable(shape = CircleShape, pressedScale = 0.96f, onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.SmartDisplay,
+                contentDescription = null,
+                tint = YouTubeAccentTint,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = "YouTube Import",
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                color = TextPrimary,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImportYouTubeMiniChip(
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = Color(0xFF202026),
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = Modifier.sonoraPressable(shape = CircleShape, pressedScale = 0.96f, onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = null,
+                tint = EmeraldAccent,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = "Import YouTube",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = TextPrimary,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun ImportYouTubeBannerCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = QuickAccessTileBg,
+        border = BorderStroke(1.dp, HeaderButtonBorder),
+        modifier = modifier
+            .fillMaxWidth()
+            .sonoraPressable(shape = RoundedCornerShape(14.dp), onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(YouTubeAccentTint.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SmartDisplay,
+                    contentDescription = null,
+                    tint = YouTubeAccentTint,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Import Official Music Videos",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Paste a YouTube link or tap to load Wish 107.5 & Global MV packs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+        }
     }
 }

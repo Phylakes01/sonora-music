@@ -1,6 +1,7 @@
 package com.sonora.music.data.local
 
 import android.content.Context
+import com.sonora.music.data.network.RegionalContentFilter
 import com.sonora.music.model.AudioSettings
 import com.sonora.music.model.EqPreset
 import com.sonora.music.model.ListeningEvent
@@ -31,6 +32,7 @@ class SonoraStore(private val rootDir: File) {
     private val followedArtistsFile get() = File(rootDir, "followed_artists.json")
     private val historyFile get() = File(rootDir, "listening_history.json")
     private val downloadedTracksFile get() = File(rootDir, "downloaded_tracks.json")
+    private val importedYouTubeTracksFile get() = File(rootDir, "imported_youtube_tracks.json")
     private val recentSearchesFile get() = File(rootDir, "recent_searches.json")
     private val audioSettingsFile get() = File(rootDir, "audio_settings.json")
 
@@ -137,6 +139,16 @@ class SonoraStore(private val rootDir: File) {
 
     fun saveDownloadedTracks(tracks: List<Track>) = synchronized(lock) {
         saveTrackList(downloadedTracksFile, tracks)
+    }
+
+    fun getImportedYouTubeTracks(): List<Track> = synchronized(lock) {
+        RegionalContentFilter.filterTracks(loadTrackList(importedYouTubeTracksFile))
+    }
+
+    fun saveImportedYouTubeTracks(tracks: List<Track>) = synchronized(lock) {
+        val cleaned = RegionalContentFilter.filterTracks(tracks)
+            .distinctBy { it.youtubeVideoId.ifBlank { it.id } }
+        saveTrackList(importedYouTubeTracksFile, cleaned)
     }
 
     fun loadRecentSearches(): List<String> = synchronized(lock) {
@@ -354,6 +366,11 @@ class SonoraStore(private val rootDir: File) {
     }
 
     private fun trackToJson(track: Track): JSONObject = JSONObject().apply {
+        val sanitizedStreamUrl = if (track.isPreviewOnly || isLegacyPreviewStreamUrl(track.streamUrl)) {
+            ""
+        } else {
+            track.streamUrl
+        }
         put("id", track.id)
         put("title", track.title)
         put("artist", track.artist)
@@ -366,7 +383,7 @@ class SonoraStore(private val rootDir: File) {
         put("artworkMirrors", JSONArray().apply {
             track.artworkMirrors.forEach { put(it) }
         })
-        put("streamUrl", track.streamUrl)
+        put("streamUrl", sanitizedStreamUrl)
         put("source", track.source.name)
         put("isLive", track.isLive)
         put("isSmartPick", track.isSmartPick)
@@ -374,7 +391,9 @@ class SonoraStore(private val rootDir: File) {
         put("playCount", track.playCount)
         put("localUri", track.localUri ?: JSONObject.NULL)
         put("externalUrl", track.externalUrl)
-        put("isPreviewOnly", track.isPreviewOnly)
+        put("isPreviewOnly", false)
+        put("youtubeVideoId", track.youtubeVideoId)
+        put("hasMusicVideo", track.hasMusicVideo)
     }
 
     private fun trackFromJson(obj: JSONObject): Track? {
@@ -384,8 +403,11 @@ class SonoraStore(private val rootDir: File) {
         val sourceName = obj.optClean("source")
         val source = TrackSource.entries.firstOrNull { it.name == sourceName } ?: TrackSource.DEEZER
         val rawStreamUrl = obj.optClean("streamUrl")
-        val isLegacyPreview = isLegacyPreviewStreamUrl(rawStreamUrl)
+        val wasPreviewOnly = obj.optBoolean("isPreviewOnly", false)
+        val isLegacyPreview = wasPreviewOnly || isLegacyPreviewStreamUrl(rawStreamUrl)
         val sanitizedStreamUrl = if (isLegacyPreview) "" else rawStreamUrl
+        val youtubeVideoId = obj.optClean("youtubeVideoId")
+        val hasMusicVideo = obj.optBoolean("hasMusicVideo", youtubeVideoId.isNotEmpty())
 
         return Track(
             id = id,
@@ -406,7 +428,9 @@ class SonoraStore(private val rootDir: File) {
             playCount = obj.optLong("playCount", 0L).coerceAtLeast(0L),
             localUri = obj.optClean("localUri").ifBlank { null },
             externalUrl = obj.optClean("externalUrl"),
-            isPreviewOnly = false
+            isPreviewOnly = false,
+            youtubeVideoId = youtubeVideoId,
+            hasMusicVideo = hasMusicVideo
         )
     }
 
@@ -414,6 +438,8 @@ class SonoraStore(private val rootDir: File) {
         if (url.isBlank()) return false
         val lower = url.lowercase(Locale.ROOT)
         return lower.contains("dzcdn.net") ||
+            lower.contains("cdns-preview") ||
+            lower.contains("cdnt-preview") ||
             lower.contains("audio-ssl.itunes.apple.com") ||
             lower.contains("itunes.apple.com")
     }

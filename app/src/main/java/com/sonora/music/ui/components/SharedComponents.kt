@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -60,10 +61,12 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -416,7 +419,8 @@ fun SonoraSectionHeader(
     subtitle: String? = null,
     actionLabel: String? = null,
     onActionClick: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    trailingContent: (@Composable () -> Unit)? = null
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -445,7 +449,10 @@ fun SonoraSectionHeader(
                 )
             }
         }
-        if (!actionLabel.isNullOrBlank() && onActionClick != null) {
+        if (trailingContent != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            trailingContent()
+        } else if (!actionLabel.isNullOrBlank() && onActionClick != null) {
             Text(
                 text = actionLabel,
                 style = MaterialTheme.typography.labelLarge,
@@ -512,20 +519,225 @@ fun SonoraBadge(
 ) {
     Surface(
         shape = RoundedCornerShape(4.dp),
-        color = ObsidianCard,
+        color = tint.copy(alpha = 0.14f),
+        border = BorderStroke(0.6.dp, tint.copy(alpha = 0.35f)),
         modifier = modifier
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold,
                 letterSpacing = 0.4.sp
             ),
-            color = TextSecondary,
+            color = tint,
             maxLines = 1,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
         )
+    }
+}
+
+@Composable
+fun MusicVideoCard(
+    track: Track,
+    isCurrent: Boolean = false,
+    isPlaying: Boolean = false,
+    isLiked: Boolean = false,
+    onClick: () -> Unit,
+    onMoreClick: (() -> Unit)? = null,
+    onLikeClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier.width(252.dp)
+) {
+    val thumbUrl = remember(track.id, track.artworkUrl, track.youtubeVideoId) {
+        track.artworkUrl?.takeIf { it.isNotBlank() }
+            ?: track.youtubeVideoId.takeIf { it.isNotBlank() }?.let {
+                "https://i.ytimg.com/vi/$it/hqdefault.jpg"
+            }
+    }
+    val pillLabel = if (track.isVideoOnly || track.source == TrackSource.YOUTUBE) "VIDEO" else "MV"
+
+    Column(
+        modifier = modifier.sonoraPressable(
+            shape = RoundedCornerShape(12.dp),
+            pressedScale = 0.98f,
+            onClick = onClick
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(ObsidianCard)
+                .border(
+                    width = if (isCurrent) 1.5.dp else 1.dp,
+                    color = if (isCurrent) EmeraldAccent else ObsidianStroke,
+                    shape = RoundedCornerShape(12.dp)
+                )
+        ) {
+            SonoraArtwork(
+                artworkUrl = thumbUrl,
+                title = track.title,
+                cornerRadius = 12.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Dark scrim for legible duration & badges
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x45000000),
+                                Color.Transparent,
+                                Color(0xAA000000)
+                            )
+                        )
+                    )
+            )
+
+            // Top-left MV / VIDEO pill
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xCC121216),
+                border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.16f)),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SmartDisplay,
+                        contentDescription = null,
+                        tint = if (pillLabel == "VIDEO") Color(0xFFFF5A5F) else EmeraldAccent,
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Text(
+                        text = pillLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        ),
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // Center Play badge (or active equalizer bars)
+            Surface(
+                shape = CircleShape,
+                color = if (isCurrent) EmeraldAccent else Color(0xBF121216),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (isCurrent) EmeraldAccent else Color.White.copy(alpha = 0.28f)
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (isCurrent) {
+                        AnimatedPlayingBars(
+                            isPlaying = isPlaying,
+                            color = Color.Black,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = "Play Music Video",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            // Bottom-right duration pill
+            if (track.durationSec > 0 || track.isLive) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xCC0D0D10),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        text = track.formattedDuration,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = Color.White,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = track.title.ifBlank { "Untitled Video" },
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = if (isCurrent) EmeraldAccent else TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = track.displayArtist,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (onLikeClick != null) {
+                IconButton(
+                    onClick = onLikeClick,
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isLiked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = if (isLiked) "Unlike" else "Like",
+                        tint = if (isLiked) EmeraldAccent else TextMuted,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+
+            if (onMoreClick != null) {
+                IconButton(
+                    onClick = onMoreClick,
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "Video options",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -695,6 +907,9 @@ fun TrackRow(
     }
 
     val isDownloaded = downloadState?.status == DownloadStatus.DOWNLOADED
+    val showMvPill = track.hasMusicVideo ||
+        track.source == TrackSource.YOUTUBE ||
+        track.youtubeVideoId.isNotBlank()
     val subtitleText = remember(
         track.id,
         track.artist,
@@ -783,6 +998,12 @@ fun TrackRow(
                         modifier = Modifier.size(13.dp)
                     )
                 }
+                if (showMvPill) {
+                    SonoraBadge(
+                        text = "MV",
+                        tint = if (track.isVideoOnly) Color(0xFFFF6B6B) else EmeraldAccent
+                    )
+                }
                 Text(
                     text = subtitleText,
                     style = MaterialTheme.typography.bodyMedium,
@@ -795,7 +1016,7 @@ fun TrackRow(
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        if (!track.isLive && track.source != TrackSource.LOCAL) {
+        if (!track.isLive && track.source != TrackSource.LOCAL && !track.isVideoOnly) {
             Box(
                 modifier = Modifier
                     .size(34.dp)
@@ -958,7 +1179,8 @@ fun TrackActionSheet(
     onDownloadToggle: () -> Unit,
     onGoToArtist: () -> Unit,
     onShare: () -> Unit,
-    onOpenFullTrack: () -> Unit = {}
+    onOpenFullTrack: () -> Unit = {},
+    onWatchMusicVideo: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -1031,6 +1253,18 @@ fun TrackActionSheet(
             HorizontalDivider(color = ObsidianStroke, thickness = 1.dp)
             Spacer(modifier = Modifier.height(6.dp))
 
+            if ((track.hasMusicVideo || track.youtubeVideoId.isNotBlank()) && onWatchMusicVideo != null) {
+                SheetActionItem(
+                    icon = Icons.Rounded.SmartDisplay,
+                    label = "Watch Music Video",
+                    tint = EmeraldAccent,
+                    onClick = {
+                        onWatchMusicVideo()
+                        onDismiss()
+                    }
+                )
+            }
+
             if (!track.isLive &&
                 track.source != TrackSource.LOCAL &&
                 track.source != TrackSource.PODCAST &&
@@ -1038,7 +1272,7 @@ fun TrackActionSheet(
             ) {
                 SheetActionItem(
                     icon = Icons.AutoMirrored.Rounded.OpenInNew,
-                    label = "Open Full Song",
+                    label = if (track.youtubeVideoId.isNotBlank()) "Open in YouTube" else "Open Full Song",
                     tint = TextPrimary,
                     onClick = {
                         onOpenFullTrack()
@@ -1080,7 +1314,7 @@ fun TrackActionSheet(
                 }
             )
 
-            if (!track.isLive && track.source != TrackSource.LOCAL) {
+            if (!track.isLive && track.source != TrackSource.LOCAL && !track.isVideoOnly) {
                 val isDownloaded = downloadState?.status == DownloadStatus.DOWNLOADED
                 val isDownloading = downloadState?.status == DownloadStatus.DOWNLOADING
                 SheetActionItem(
